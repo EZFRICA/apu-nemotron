@@ -1,0 +1,19 @@
+# Inference: Nebius Token Factory, OpenAI-compatible API (apu/inference/nebius_client.py).
+openai>=1.0.0
+
+# Agent runtime (apu/runtime/agent.py). langchain-core is imported directly for the
+# message types, so it is listed rather than relied on as a langgraph transitive.
+langgraph
+langchain-core
+python-dotenv
+
+# Local embeddings: ONNX via fastembed. Deliberately NOT sentence-transformers/torch,
+# both disqualifying on the target hardware. Pinned to the minor Akili was tested on.
+fastembed>=0.8.0,<0.9
+
+# L3 vector store. Pinned to the tested minor: list_tables() changed its return type
+# within the 0.30 line, and an unattended upgrade across that boundary silently
+# disabled the whole L3 tier in Akili.
+lancedb>=0.30.2,<0.31
+pandas
+pyarrow

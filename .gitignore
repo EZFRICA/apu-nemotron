@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+.DS_Store
+
+# Per-device state (DLL JSON, LanceDB, embedding stamp), not source.
+data/
+# ONNX embedding model cache (~240MB), populated by scripts/fetch_embedding_model.py.
+models/
+apu_runtime.log
