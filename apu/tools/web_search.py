@@ -2,10 +2,10 @@
 
 Gate: search() requires the ValidatedTurn that the topical rail issued for the session's
 CURRENT turn. No proof, a proof from an earlier turn, or a proof for another session, and
-the search is refused before any request leaves the process. This is what keeps web search
-behind the guard whichever way the model ends up asking for it: native tool calls (method A)
-or a parsed JSON action (method B). That choice waits on scripts/smoke_test_tool_calling.py
-(see HACKATHON.md) and is not wired yet; either path must call search() with the turn's proof.
+the search is refused before any request leaves the process. The model asks for a search
+through native OpenAI tool calls (Method A, chosen from scripts/smoke_test_tool_calling.py,
+see HACKATHON.md): apu.runtime.agent offers WEB_SEARCH_TOOL only on validated turns, and
+executes each call through search() with that turn's proof.
 
 Excluded domains: config.GLOBAL_EXCLUDED_DOMAINS plus the class's own additions, taken from
 the policy captured by the session, never from the caller. A class can add exclusions, never
@@ -27,6 +27,34 @@ from apu.guardrails.policy import ClassPolicy
 from apu.guardrails.session import GuardSession, SessionRegistry, UnknownSession, ValidatedTurn
 from apu.guardrails.session import sessions as default_sessions
 from apu.modality.citations import Source
+
+
+WEB_SEARCH_TOOL_NAME = "web_search"
+
+# OpenAI tool schema offered to Nemotron on validated turns.
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": WEB_SEARCH_TOOL_NAME,
+        "description": (
+            "Search the web for information the student needs for their schoolwork, when the "
+            "course context and the student memory are not enough to answer accurately."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A focused search query, in the language of the course.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+# Per result, enough for the model to answer from; the full page is not needed.
+_SNIPPET_LIMIT = 800
 
 
 class GuardViolation(PermissionError):
@@ -60,6 +88,17 @@ class WebSearchResult:
     query: str
     sources: tuple[Source, ...]
     snippets: tuple[str, ...]
+
+
+def format_search_result_for_model(result: WebSearchResult) -> str:
+    """The tool message content: numbered results the model can ground its answer in."""
+    if not result.sources:
+        return f"No web results for {result.query!r}."
+    blocks = [
+        f"[{number}] {source.title} ({source.url})\n{snippet[:_SNIPPET_LIMIT]}"
+        for number, (source, snippet) in enumerate(zip(result.sources, result.snippets), start=1)
+    ]
+    return "\n\n".join(blocks)
 
 
 class TavilySearch:
@@ -120,3 +159,13 @@ class TavilySearch:
             raise WebSearchUnavailable("TAVILY_API_KEY is not set (.env).")
         # Built per search: the exclusions depend on the session's class policy.
         return LangchainTavilySearch(max_results=self._max_results, exclude_domains=excluded)
+
+
+_web_search: TavilySearch | None = None
+
+
+def get_web_search() -> TavilySearch:
+    global _web_search
+    if _web_search is None:
+        _web_search = TavilySearch()
+    return _web_search

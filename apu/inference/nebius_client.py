@@ -39,6 +39,21 @@ def call_main_model(messages: list[dict], **kwargs) -> str:
     return response.choices[0].message.content
 
 
+def call_main_model_message(messages: list[dict], **kwargs):
+    """Answer call returning the whole assistant message, not only its text.
+
+    Needed for native tool calling (Method A, see HACKATHON.md): when Nemotron asks for a
+    tool, `content` is None and the request is in `tool_calls`, which call_main_model
+    would drop. The reasoning trace, when present, is in `model_extra["reasoning_content"]`.
+    """
+    response = _client.chat.completions.create(
+        model=kwargs.pop("model", MAIN_MODEL),
+        messages=messages,
+        **kwargs,
+    )
+    return response.choices[0].message
+
+
 def call_extraction_model(messages: list[dict], **kwargs) -> str:
     """Background memory-extraction call, off the critical path.
 

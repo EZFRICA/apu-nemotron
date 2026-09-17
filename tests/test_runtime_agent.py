@@ -107,7 +107,11 @@ async def test_a_turn_sends_the_answer_to_super_and_the_extraction_to_nano(
     assert [c["model"] for c in fake_nebius.calls] == [
         config.MAIN_MODEL, config.EXTRACTION_MODEL,
     ], "answer first, then the write-back, each on its own model"
-    assert fake_nebius.main_calls[0]["kwargs"] == {"temperature": 0.7}
+    kwargs = fake_nebius.main_calls[0]["kwargs"]
+    assert kwargs["temperature"] == 0.7
+    assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["web_search"], (
+        "the guard validated this turn, so web search is offered"
+    )
 
 
 async def test_the_write_back_is_still_inline(

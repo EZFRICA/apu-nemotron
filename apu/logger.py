@@ -39,6 +39,9 @@ def configure_root_logger():
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
+    # NeMo Guardrails logs every Colang event at INFO, dozens of lines per student turn,
+    # which buries the tutor's own log under the rail's internals.
+    logging.getLogger("nemoguardrails").setLevel(logging.WARNING)
 
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)

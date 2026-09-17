@@ -208,7 +208,7 @@ What varies per class is data, not Colang: `registries/class_policies.json` hold
 
 ### Web search (Tavily)
 
-`apu/tools/web_search.py` only searches for a turn the topical guard validated, excludes social networks for everyone (`GLOBAL_EXCLUDED_DOMAINS`) plus each class's own additions, and returns its sources. `apu/modality/citations.py` renders them per output channel: a list at the end in text or braille; source names said aloud (never URLs) in voice, plus the written list when a screen is available. **Search is not yet called during answers**: how the model requests it waits on the tool-calling smoke test (see [HACKATHON.md](./HACKATHON.md)).
+`apu/tools/web_search.py` only searches for a turn the topical guard validated, excludes social networks for everyone (`GLOBAL_EXCLUDED_DOMAINS`) plus each class's own additions, and returns its sources. `apu/modality/citations.py` renders them per output channel: a list at the end in text or braille; source names said aloud (never URLs) in voice, plus the written list when a screen is available. Nemotron requests a search through native OpenAI tool calls (Method A, chosen from the tool-calling smoke test, see [HACKATHON.md](./HACKATHON.md)). The `web_search` tool is only offered on turns the guard validated, and a turn makes at most 2 searches before the model must answer.
 
 ### Escalations and clustering
 

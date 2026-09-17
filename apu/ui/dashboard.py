@@ -496,6 +496,8 @@ with col_chat:
             # A memory write that failed must be visible, not just logged.
             for _problem in result.get("memory_problems") or []:
                 st.warning(f"Memory not updated: {_problem}")
+            for _problem in result.get("tool_problems") or []:
+                st.warning(f"Web search: {_problem}")
 
             if result.get("needs_new_block") == "True":
                 st.session_state.pending_block_proposal = result.get("proposed_block_config")

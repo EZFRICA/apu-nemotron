@@ -11,6 +11,8 @@ Invariants this suite maintains:
     real ONNX embedder through `real_local_embedder`.
 """
 
+import copy
+import json
 import os
 import socket
 from types import SimpleNamespace
@@ -81,6 +83,25 @@ def no_network(monkeypatch):
 
 
 # ── fake Nebius Token Factory client ─────────────────────────────────────────
+class FakeToolCall:
+    """Shaped like the OpenAI SDK's tool call, as the smoke test showed Token Factory returns it."""
+
+    def __init__(self, id: str, name: str, arguments: str):
+        self.id = id
+        self.type = "function"
+        self.function = SimpleNamespace(name=name, arguments=arguments)
+
+    def model_dump(self) -> dict:
+        return {"id": self.id, "type": self.type,
+                "function": {"name": self.function.name, "arguments": self.function.arguments}}
+
+
+def tool_call_reply(name: str, arguments: dict, call_id: str = "call-1") -> dict:
+    """A main-model reply that asks for one tool, with content None as Nemotron returns it."""
+    return {"content": None,
+            "tool_calls": [{"id": call_id, "name": name, "arguments": json.dumps(arguments)}]}
+
+
 class FakeNebiusClient:
     """
     Stands in for the OpenAI client inside apu.inference.nebius_client.
@@ -110,12 +131,22 @@ class FakeNebiusClient:
         else:
             raise AssertionError(f"unexpected model id sent to Nebius: {model!r}")
 
+        # A copy: the agent keeps appending tool round trips to the same list after the
+        # call, which would otherwise rewrite what this call appears to have received.
+        self.calls[-1]["messages"] = copy.deepcopy(messages)
+
         reply = (queue.pop(0) if len(queue) > 1 else queue[0]) if queue else ""
         if isinstance(reply, Exception):
             raise reply
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=reply))]
-        )
+        if isinstance(reply, dict):
+            message = SimpleNamespace(
+                content=reply.get("content"),
+                tool_calls=[FakeToolCall(**call) for call in reply.get("tool_calls", [])] or None,
+                model_extra={},
+            )
+        else:
+            message = SimpleNamespace(content=reply, tool_calls=None, model_extra={})
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
     @property
     def main_calls(self):
