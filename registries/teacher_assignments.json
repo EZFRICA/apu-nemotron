@@ -1,0 +1,25 @@
+[
+  {
+    "requester_id": "prof-kouassi",
+    "role": "teacher",
+    "establishment_id": "lycee-cocody",
+    "class_id": "lycee-cocody:3eA"
+  },
+  {
+    "requester_id": "prof-traore",
+    "role": "teacher",
+    "establishment_id": "lycee-cocody",
+    "class_id": "lycee-cocody:4eB"
+  },
+  {
+    "requester_id": "admin-cocody",
+    "role": "establishment_admin",
+    "establishment_id": "lycee-cocody"
+  },
+  {
+    "requester_id": "prof-bamba",
+    "role": "teacher",
+    "establishment_id": "college-yopougon",
+    "class_id": "college-yopougon:6eC"
+  }
+]

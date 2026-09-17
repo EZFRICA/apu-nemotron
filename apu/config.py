@@ -63,6 +63,22 @@ METADATA_LINKS_PATH = os.path.join(DATA_DIR, "memory", "metadata_links.json")
 # Sidecar recording which embedder wrote each L3 table, so a model swap is caught.
 EMBEDDING_STAMP_PATH = os.path.join(DATA_DIR, "embedding_stamp.json")
 
+# ── Cloud course registry (device side, apu/sync/sync_manager.py) ────────────
+# Manifest of the registry this device downloads courses from. The GCS bucket is
+# derived from this URL (its 4th "/" segment), so pointing a device at another
+# registry is this one setting. The default is Akili's bucket; Akili hardcoded it.
+REGISTRY_MANIFEST_URL = os.environ.get(
+    "REGISTRY_MANIFEST_URL", "https://storage.googleapis.com/akili-registry/manifest.json"
+)
+
+# A downloaded parquet lands here, is imported into L3, then deleted.
+CACHE_DIR = os.path.join(DATA_DIR, "cache")
+
+# Service-account JSON with read access to the registry bucket. Unset: Application
+# Default Credentials (`gcloud auth application-default login`). Akili's client reads
+# the registry through an authenticated client, so one of the two is required.
+GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+
 # ── MMU tunables ─────────────────────────────────────────────────────────────
 # NOT WIRED. The scaffold documents a hard cap of 12 active blocks. That figure comes
 # from the travel-agent APU (4 fixed + 8 dynamic; its controller says "the absolute
@@ -100,3 +116,47 @@ MIN_RELEVANCE_CERTAINTY = 0.45
 # ── Education defaults (Akili) ───────────────────────────────────────────────
 EDU_DEFAULT_CLASS = "6eme"
 EDU_DEFAULT_SUBJECT = "math"
+
+# ── Web search (Tavily) ──────────────────────────────────────────────────────
+# Excluded for every class, always. A class policy can only ADD domains to this list
+# (ClassPolicy.tavily_excluded_domains), never remove one. There is deliberately no
+# allowlist of "trusted" sites beyond it: the search stays broad on purpose.
+GLOBAL_EXCLUDED_DOMAINS: tuple[str, ...] = (
+    "twitter.com",
+    "x.com",
+    "instagram.com",
+    "tiktok.com",
+    "facebook.com",
+    "reddit.com",
+)
+TAVILY_MAX_RESULTS = int(os.environ.get("TAVILY_MAX_RESULTS", "5"))
+
+# ── Guardrails (NeMo Guardrails) ─────────────────────────────────────────────
+# One shared config for every class. What varies per class is data (ClassPolicy),
+# not Colang, so adding a class never means compiling a new rails config.
+GUARDRAILS_CONFIG_DIR = os.path.join(_REPO_ROOT, "apu", "guardrails", "config")
+
+# ── Registries, loaded once at startup ───────────────────────────────────────
+# Per-class policy (escalation threshold, extra excluded domains) and who teaches or
+# administers which class. The shipped files are demo data for a fictional school.
+CLASS_POLICIES_PATH = os.environ.get(
+    "APU_CLASS_POLICIES_PATH", os.path.join(_REPO_ROOT, "registries", "class_policies.json")
+)
+TEACHER_ASSIGNMENTS_PATH = os.environ.get(
+    "APU_TEACHER_ASSIGNMENTS_PATH",
+    os.path.join(_REPO_ROOT, "registries", "teacher_assignments.json"),
+)
+
+# ── Escalation events ────────────────────────────────────────────────────────
+# Kept out of the tutoring memory entirely (see apu/mmu/escalation_store.py).
+ESCALATION_DB_PATH = os.path.join(DATA_DIR, "escalations.sqlite3")
+# A class's clusters are recomputed once this many new events have arrived in that
+# class since its last snapshot. Small enough that a teacher sees a pattern the same
+# day, large enough that clustering does not run on every single event.
+ESCALATION_CLUSTER_TRIGGER_COUNT = int(os.environ.get("APU_ESCALATION_CLUSTER_TRIGGER_COUNT", "5"))
+
+# ── Dashboard identity: STUB, not authentication ─────────────────────────────
+# The Streamlit dashboard has no login. It opens every guard session as this student in
+# this class. Anyone who can reach the dashboard is this student.
+DEMO_STUDENT_ID = os.environ.get("APU_STUDENT_ID", "eleve-demo")
+DEMO_CLASS_ID = os.environ.get("APU_CLASS_ID", "lycee-cocody:3eA")

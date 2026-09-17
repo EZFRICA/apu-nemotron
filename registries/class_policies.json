@@ -1,0 +1,23 @@
+[
+  {
+    "class_id": "lycee-cocody:3eA",
+    "teacher_id": "prof-kouassi",
+    "tavily_excluded_domains": ["youtube.com"],
+    "escalation_threshold": 3,
+    "updated_at": "2026-09-17T08:00:00+00:00"
+  },
+  {
+    "class_id": "lycee-cocody:4eB",
+    "teacher_id": "prof-traore",
+    "tavily_excluded_domains": [],
+    "escalation_threshold": 2,
+    "updated_at": "2026-09-17T08:00:00+00:00"
+  },
+  {
+    "class_id": "college-yopougon:6eC",
+    "teacher_id": "prof-bamba",
+    "tavily_excluded_domains": ["wikihow.com"],
+    "escalation_threshold": 4,
+    "updated_at": "2026-09-17T08:00:00+00:00"
+  }
+]

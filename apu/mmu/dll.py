@@ -41,6 +41,7 @@ from apu.core.block_proposal import validate as validate_proposal
 from apu.embeddings import local_embedder
 from apu.logger import get_logger
 from apu.mmu import cache_l1
+from apu.mmu.block_types import refuse_non_tutoring_block_type
 from apu.storage import lance_driver
 
 logger = get_logger(__name__)
@@ -413,6 +414,7 @@ def insert_node_by_type(block_type: str, new_node: dict, dll: dict) -> dict:
         projet      → Middle (active planning)
         fondamental → Before TAIL (permanent knowledge)
     """
+    refuse_non_tutoring_block_type(block_type)
     nodes = dll["nodes"]
 
     if block_type == "temp":
@@ -544,6 +546,9 @@ async def create_dynamic_block(
     """
     Creates a dynamic block in the DLL and LanceDB.
     """
+    # Before the eviction below: refusing a forbidden block must not page out a real one.
+    refuse_non_tutoring_block_type(block_type)
+
     if dll["dynamic_block_count"] >= dll["dynamic_block_max"]:
         # Semantic MMU: page out the least recently accessed block.
         #

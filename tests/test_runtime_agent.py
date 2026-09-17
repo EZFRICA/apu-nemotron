@@ -25,6 +25,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 def _state(query="Combien font 3/4 + 2/5 ?"):
     return {
         "messages": [HumanMessage(content=query)],
+        "session_id": "session-test",  # opened by the autouse topical_guard fixture
         "agent_id": "agent-test", "class_level": "6eme", "subject": "math",
         "memory_only_mode": False, "needs_new_block": "False",
         "proposed_block_config": {},
@@ -167,3 +168,54 @@ async def test_a_turn_runs_end_to_end_through_the_graph(
     assert result["messages"][-1].content == "Cela fait 23."
     assert result["memory_problems"] == []
     assert "Combien font 3/4 + 2/5 ?" in fake_nebius.extraction_calls[0]["messages"][0]["content"]
+
+
+# ── the topical guard in front of every turn ─────────────────────────────────
+
+async def test_an_off_topic_turn_gets_the_guard_reply_and_nothing_else(
+    akili_paths, no_network, stub_embeddings, fake_nebius
+):
+    """No answer model, no extraction, no memory write for an off-topic turn."""
+    import apu.runtime.agent as agent
+    from apu.guardrails.actions import GENTLE_REPLY
+    from tests.conftest import OFF_TOPIC_MARKER
+
+    await mmu.init_dll()
+    before = await mmu.load_dll()
+
+    out = await agent.planner_node(_state(f"{OFF_TOPIC_MARKER} Qui a gagné le match hier ?"))
+
+    assert out["off_topic"] is True
+    assert out["messages"][0].content == GENTLE_REPLY
+    assert fake_nebius.calls == [], "no Nemotron call for an off-topic turn"
+    assert stub_embeddings == [], "not even the query was embedded"
+    assert (await mmu.load_dll())["nodes"] == before["nodes"]
+
+
+async def test_a_turn_without_a_guard_session_is_refused(akili_paths, no_network, fake_nebius):
+    import pytest as _pytest
+    import apu.runtime.agent as agent
+
+    state = _state()
+    del state["session_id"]
+    with _pytest.raises(agent.GuardSessionRequired):
+        await agent.planner_node(state)
+    assert fake_nebius.calls == []
+
+
+async def test_a_failing_guard_means_no_answer(
+    akili_paths, no_network, stub_embeddings, fake_nebius, monkeypatch
+):
+    """Fail closed: a turn the guard could not classify is not answered unguarded."""
+    import pytest as _pytest
+    import apu.runtime.agent as agent
+    from apu.guardrails import guard
+    from apu.guardrails.guard import GuardUnavailable, TopicalGuard
+    from tests.conftest import make_classifier_llm
+
+    monkeypatch.setattr(guard, "_guard", TopicalGuard(llm=make_classifier_llm(error=ConnectionError("401"))))
+    fake_nebius.main_replies = ["should never be used"]
+
+    with _pytest.raises(GuardUnavailable):
+        await agent.planner_node(_state())
+    assert fake_nebius.calls == []

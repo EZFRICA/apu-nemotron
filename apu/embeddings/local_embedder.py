@@ -93,7 +93,7 @@ def _missing_model_message(model_name: str, cache_dir: str) -> str:
         f"The local embedder never downloads at runtime, because on a machine "
         f"with no connectivity that hangs instead of failing.\n"
         f"Fix: on a CONNECTED machine run\n"
-        f"    python scripts/fetch_embedding_model.py\n"
+        f"    uv run python scripts/fetch_embedding_model.py\n"
         f"then copy '{cache_dir}' to this device, or point LOCAL_EMBEDDING_CACHE_DIR "
         f"at an existing cache."
     )
@@ -162,3 +162,15 @@ def normalize_vector(vector: Sequence[float]) -> List[float]:
     if norm == 0.0:
         return [float(x) for x in vector]
     return [float(x) / norm for x in vector]
+
+
+def embedding_stamp() -> dict:
+    """
+    The identity of the configured embedder, as written into the registry manifest
+    by the cloud pipeline and compared by the device before downloading a course.
+
+    Read from config at call time, so both sides always describe the model they are
+    actually configured with. Comparing the two is what turns a silent vector-space
+    mismatch into a readable refusal.
+    """
+    return {"model": config.LOCAL_EMBEDDING_MODEL, "dim": config.LOCAL_EMBEDDING_DIM}

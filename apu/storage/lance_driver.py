@@ -15,6 +15,7 @@ import lancedb
 
 from apu import config
 from apu.embeddings import local_embedder
+from apu.mmu.block_types import TUTORING_EXCLUDED_BLOCK_TYPES, refuse_non_tutoring_block_type
 
 _db = None
 _db_lock = threading.Lock()
@@ -240,6 +241,10 @@ async def search_block_index(query_vector: List[float], limit: int = 12,
         df = query.to_pandas()
 
         for _, row in df.iterrows():
+            # Defence in depth: upsert_local_block already refuses these types, but a row
+            # written some other way must still never reach a tutoring prompt.
+            if row.get("block_type") in TUTORING_EXCLUDED_BLOCK_TYPES:
+                continue
             dist = row.get("_distance", 0)
             certainty = 1 - (dist / 2)
 
@@ -281,6 +286,7 @@ async def upsert_local_block(block_id: str, content: str, block_type: str,
     Allows the student to add their own blocks (notes, session)
     into a separate local table 'user_memory'.
     """
+    refuse_non_tutoring_block_type(block_type)
     db = get_db()
     data = [{
         "id": block_id,

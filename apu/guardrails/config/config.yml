@@ -1,0 +1,18 @@
+# Shared NeMo Guardrails configuration for every class.
+#
+# The main model is served by Nebius Token Factory through its OpenAI-compatible API
+# ("Custom LLM Provider / OpenAI-Compatible API"), not by OpenAI: `engine: openai` selects
+# the OpenAI-compatible client, `parameters.base_url` points it at Token Factory, and the
+# key is read from NEBIUS_API_KEY, never written here.
+models:
+  - type: main
+    engine: openai
+    model: nvidia/nemotron-3-super-120b-a12b
+    api_key_env_var: NEBIUS_API_KEY
+    parameters:
+      base_url: https://api.tokenfactory.nebius.com/v1/
+
+rails:
+  input:
+    flows:
+      - school topic check

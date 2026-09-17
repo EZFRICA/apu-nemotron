@@ -1,0 +1,58 @@
+[project]
+name = "apu-nemotron"
+version = "0.1.0"
+description = "Agent Processor Unit (Akili) ported to NVIDIA Nemotron on Nebius Token Factory, with a local ONNX embedder"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.13"
+dependencies = [
+    # Inference: Nebius Token Factory, OpenAI-compatible API (apu/inference/nebius_client.py).
+    "openai>=1.0.0",
+    # Agent runtime (apu/runtime/agent.py). langchain-core is imported directly for
+    # the message types, so it is listed rather than relied on as a transitive.
+    "langgraph",
+    "langchain-core",
+    "python-dotenv",
+    # Local embeddings: ONNX via fastembed. Deliberately NOT sentence-transformers/torch,
+    # both disqualifying on the target hardware. Pinned to the minor Akili was tested on.
+    "fastembed>=0.8.0,<0.9",
+    # L3 vector store. Pinned to the tested minor: list_tables() changed its return
+    # type within the 0.30 line, and an unattended upgrade across that boundary
+    # silently disabled the whole L3 tier in Akili.
+    "lancedb>=0.30.2,<0.31",
+    "pandas",
+    "pyarrow",
+    # APU Control Center (apu/ui/dashboard.py). Same floor as Akili. watchdog is
+    # what Streamlit uses to reload on file changes; without it it falls back to
+    # slower polling and prints a warning at every launch.
+    "streamlit>=1.55.0",
+    "watchdog>=6.0.0",
+    # Cloud course registry (cloud_registry/ publishes, apu/sync/ downloads). Both
+    # sides go through an authenticated GCS client, as in Akili; httpx is for the
+    # public-HTTP manifest fetch, pyyaml for curriculum.yaml.
+    "google-cloud-storage>=3.4.1",
+    "google-auth>=2.49.2",
+    "httpx>=0.28.1",
+    "pyyaml>=6.0.3",
+    "nemoguardrails>=0.24.1",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.30",
+    "langchain-tavily>=0.2.18",
+    "tavily-python>=0.8.3",
+    "scikit-learn>=1.9.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.uv]
+# An application, not a library: `uv sync` installs the dependencies without
+# building and installing apu itself; commands run from the repo root import it.
+package = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

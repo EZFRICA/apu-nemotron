@@ -12,3 +12,7 @@ data/
 # ONNX embedding model cache (~240MB), populated by scripts/fetch_embedding_model.py.
 models/
 apu_runtime.log
+
+# Build output of the cloud pipeline. Regenerated from cloud_registry/courses/ by
+# batch_pipeline.py and distributed through the bucket, not git.
+cloud_registry/registry/

@@ -135,6 +135,58 @@ def fake_nebius(monkeypatch):
     return fake
 
 
+# ── topical guard ────────────────────────────────────────────────────────────
+# Every tutoring turn goes through the NeMo Guardrails input rail. Tests run the real rail
+# with a scripted classifier model instead of Nemotron: a message containing
+# OFF_TOPIC_MARKER is classified off-topic, everything else school work.
+OFF_TOPIC_MARKER = "[hors-sujet]"
+TEST_SESSION_ID = "session-test"
+TEST_CLASS_ID = "lycee-cocody:3eA"
+
+
+def scripted_verdict(prompt) -> str:
+    return "HORS_SUJET" if OFF_TOPIC_MARKER in str(prompt) else "SCOLAIRE"
+
+
+def make_classifier_llm(verdict_for=scripted_verdict, error: Exception | None = None):
+    from nemoguardrails.testing.fake_model import FakeLLMModel
+    from nemoguardrails.types import LLMResponse
+
+    class ClassifierLLM(FakeLLMModel):
+        """Answers every classifier call from the prompt, instead of a fixed list."""
+
+        def __init__(self):
+            super().__init__(responses=[])
+            self.calls: list[tuple[object, dict]] = []
+
+        async def generate_async(self, prompt, *, stop=None, **kwargs):
+            self.calls.append((prompt, kwargs))
+            self.inference_count += 1
+            if error is not None:
+                raise error
+            return LLMResponse(content=verdict_for(prompt))
+
+    return ClassifierLLM()
+
+
+@pytest.fixture(scope="session")
+def _scripted_topical_guard():
+    from apu.guardrails.guard import TopicalGuard
+    return TopicalGuard(llm=make_classifier_llm())
+
+
+@pytest.fixture(autouse=True)
+def topical_guard(_scripted_topical_guard, monkeypatch):
+    """Install the scripted guard and open the default test session for every test."""
+    from apu.guardrails import guard
+    from apu.guardrails.session import sessions
+
+    monkeypatch.setattr(guard, "_guard", _scripted_topical_guard)
+    sessions.open_session(student_id="eleve-test", class_id=TEST_CLASS_ID, session_id=TEST_SESSION_ID)
+    yield _scripted_topical_guard
+    sessions.close(TEST_SESSION_ID)
+
+
 # ── isolated storage ─────────────────────────────────────────────────────────
 @pytest.fixture
 def akili_paths(tmp_path, monkeypatch):
@@ -150,6 +202,7 @@ def akili_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LANCE_DB_PATH", str(db_path))
     monkeypatch.setattr(config, "METADATA_LINKS_PATH", str(meta_path))
     monkeypatch.setattr(config, "EMBEDDING_STAMP_PATH", str(tmp_path / "embedding_stamp.json"))
+    monkeypatch.setattr(config, "ESCALATION_DB_PATH", str(tmp_path / "escalations.sqlite3"))
     # The suite's hand-built vectors are DIM-wide, so the configured embedder for
     # a test is a DIM-wide one. Without this, every storage test would trip the
     # dimension check against the real 384-dim default.

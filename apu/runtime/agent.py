@@ -33,6 +33,7 @@ from apu import config
 from apu.core.block_detector import detect_new_block_opportunity
 from apu.core.extraction import parse_extraction
 from apu.embeddings import local_embedder
+from apu.guardrails import guard as topical_guard
 from apu.logger import get_logger
 from apu.mmu import cache_l1
 from apu.mmu import dll as mmu
@@ -123,6 +124,14 @@ class AgentState(TypedDict):
     needs_new_block: str
     proposed_block_config: dict
     memory_problems: List[str]
+    # Guard session opened by the caller (dashboard, API): carries the class policy and the
+    # off-topic counter. Required: no turn is answered without the topical guard.
+    session_id: str
+    off_topic: bool
+
+
+class GuardSessionRequired(ValueError):
+    """A turn reached the planner without a guard session."""
 
 
 def build_message_window(history, prompt, exchanges: int) -> List[BaseMessage]:
@@ -220,6 +229,26 @@ async def planner_node(state: AgentState):
          if isinstance(m, HumanMessage)),
         state["messages"][-1].content,
     )
+
+    # 0. Topical guard, before anything touches memory or a model. An off-topic turn gets
+    # the guard's reply and nothing else: no retrieval, no answer, no memory write-back.
+    session_id = state.get("session_id")
+    if not session_id:
+        raise GuardSessionRequired(
+            "planner_node needs state['session_id'] from a guard session "
+            "(apu.guardrails.session.sessions.open_session)."
+        )
+    decision = await topical_guard.get_topical_guard().check(session_id, user_query)
+    if not decision.allowed:
+        return {
+            "messages": [AIMessage(content=decision.reply or "")],
+            "needs_new_block": "False",
+            "proposed_block_config": {},
+            "memory_problems": [],
+            "off_topic": True,
+        }
+    # decision.validated_turn is what web search (apu.tools.web_search) requires. Wiring
+    # search into generation waits for the tool-calling smoke test (HACKATHON.md).
 
     # 1. Query Vectorization — local ONNX, no network round trip. Resolved through
     # the module at call time: the embedder is process-cached and swappable.

@@ -24,6 +24,7 @@ EXTRACTION_REPLY = json.dumps({
 def _state():
     return {
         "messages": [HumanMessage(content="hi")],
+        "session_id": "session-test",  # opened by the autouse topical_guard fixture
         "agent_id": "agent-test", "class_level": "6eme", "subject": "math",
         "memory_only_mode": False, "needs_new_block": "False",
         "proposed_block_config": {},
