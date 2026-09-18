@@ -1,0 +1,27 @@
+# Streamlit settings for the demo interface. Read when Streamlit is launched from the
+# repository root:  uv run streamlit run apu/ui/app.py
+
+[server]
+# Loopback only. The interface has NO authentication: its sidebar hands out the teacher and
+# admin views to whoever opens the page. Streamlit's default binds every interface, which on
+# a venue network means the whole room. Change this only behind real authentication.
+address = "localhost"
+# No browser auto-open and no first-run e-mail prompt in the terminal: the URL is printed,
+# open it yourself. Also hides the "install Streamlit skills" banner.
+headless = true
+runOnSave = false
+
+[browser]
+# No usage statistics sent during a demo (and nothing that needs the network).
+gatherUsageStats = false
+
+[client]
+# Keep the top-right menu minimal on a projected screen.
+toolbarMode = "minimal"
+
+[theme]
+base = "dark"
+primaryColor = "#38bdf8"
+backgroundColor = "#020617"
+secondaryBackgroundColor = "#0f172a"
+textColor = "#f1f5f9"
