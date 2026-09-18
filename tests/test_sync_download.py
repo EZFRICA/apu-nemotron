@@ -66,13 +66,53 @@ async def test_a_registry_built_with_another_model_is_refused_before_download(
     assert "edu_registry" not in lance_driver.list_table_names()
 
 
-async def test_an_unstamped_manifest_still_imports(akili_paths, monkeypatch, capsys):
+async def test_a_file_that_does_not_match_the_manifest_hash_is_refused(akili_paths, monkeypatch):
+    """
+    Course content is read into the tutor's prompt, so an altered parquet must not be
+    imported. The manifest states a sha256 per file; the device checks it.
+    """
+    lying = manifest()
+    lying["files"][0]["hash"] = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    install_fake_registry(monkeypatch, akili_paths, lying, keep_manifest_hash=True)
+
+    ok, message = await sync_manager.download_course("6eme", "math")
+
+    assert not ok and "hash" in message
+    assert "edu_registry" not in lance_driver.list_table_names(), "nothing was imported"
+    assert not sync_manager.is_course_available_locally("6eme", "math")
+    assert list(pathlib.Path(config.CACHE_DIR).glob("*.parquet")) == [], "the file was removed"
+
+
+async def test_a_manifest_file_name_cannot_escape_the_cache_directory(akili_paths, monkeypatch):
+    """
+    The file name comes from a manifest fetched over plain HTTPS from a configurable URL,
+    so it is untrusted: a traversal name must be refused before anything is downloaded.
+    """
+    import pytest
+
+    escaping = manifest()
+    escaping["files"][0]["filename"] = "../../../../tmp/apu-escaped.parquet"
+    requested = install_fake_registry(monkeypatch, akili_paths, escaping)
+
+    ok, message = await sync_manager.download_course("6eme", "math")
+
+    assert not ok and "plain file name" in message
+    assert requested == ["manifest.json"], "nothing was downloaded"
+    assert not pathlib.Path("/tmp/apu-escaped.parquet").exists()
+
+    for refused in ("../x.parquet", "/etc/passwd.parquet", "course.txt", ""):
+        with pytest.raises(ValueError):
+            sync_manager.cache_path_for(refused)
+    assert sync_manager.cache_path_for("6eme_math_v1.parquet").startswith(config.CACHE_DIR)
+
+
+async def test_an_unstamped_manifest_still_imports(akili_paths, monkeypatch, caplog):
     """A registry predating stamping must not become undownloadable."""
     install_fake_registry(monkeypatch, akili_paths, manifest(model=None))
 
     ok, msg = await sync_manager.download_course("6eme", "math")
     assert ok, msg
-    assert "no embedding stamp" in capsys.readouterr().out
+    assert "no embedding stamp" in caplog.text, "the device still says the check was weaker"
 
 
 async def test_a_course_missing_from_the_registry_is_reported(akili_paths, monkeypatch):
@@ -103,7 +143,7 @@ async def test_downloading_one_course_keeps_the_others(akili_paths, monkeypatch)
     assert (await sync_manager.download_course("5eme", "history"))[0]
 
     df = lance_driver.get_db().open_table("edu_registry").to_pandas()
-    assert sorted(zip(df["class_level"], df["subject"])) == [
+    assert sorted(zip(df["class_level"], df["subject"], strict=True)) == [
         ("5eme", "history"), ("6eme", "math"),
     ]
 

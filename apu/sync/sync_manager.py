@@ -6,11 +6,12 @@ come from apu.config. Properties carried over as-is, worth knowing before relyin
   - every registry read goes through an AUTHENTICATED Google Cloud Storage client
     (service account via GOOGLE_APPLICATION_CREDENTIALS, or Application Default
     Credentials), so a device needs credentials, not only network access, to
-    download a course. download_prompts() reads over public HTTP instead, but
-    nothing calls it.
+    download a course, and the same client reads the prompts.
   - the bucket name is parsed out of REGISTRY_MANIFEST_URL (its 4th "/" segment).
   - parquets are read from the bucket root, where batch_pipeline uploads them; the
     manifest's `url` fields say /courses/, which does not match and is never read.
+  - a downloaded course is checked against the sha256 the manifest states for it, since
+    course content ends up in the tutor's prompt.
   - sync_with_registry refreshes the system prompts only, never the courses.
 """
 
@@ -18,14 +19,16 @@ import asyncio
 import hashlib
 import json
 import os
-from typing import Optional, Tuple
+from typing import Tuple
 
-import httpx
 import pandas as pd
 
 from apu import config
+from apu.logger import get_logger
 from apu.storage import lance_driver
 from apu.storage.lance_driver import get_db
+
+logger = get_logger(__name__)
 
 # ── Local manifest path ───────────────────────────────────────────────────────
 # Which courses this device holds, next to the LanceDB directory (per-device state).
@@ -46,7 +49,7 @@ async def _get_storage_client():
         from google.cloud import storage
         from google.oauth2 import service_account
     except ImportError:
-        print("  [ERROR] Google Cloud libraries not installed.")
+        logger.error("Google Cloud libraries not installed.")
         return None
 
     gac_path = config.GOOGLE_APPLICATION_CREDENTIALS
@@ -58,11 +61,11 @@ async def _get_storage_client():
             credentials, project = google.auth.default()
             return storage.Client(credentials=credentials, project=project)
     except Exception as e:
-        print(f"[Sync] Auth failed: {e}")
+        logger.error("[Sync] Auth failed: %s", e)
         return None
 
 
-async def _fetch_remote_json(blob_name: str) -> Optional[dict]:
+async def _fetch_remote_json(blob_name: str) -> dict | None:
     """Downloads and parses a remote JSON file from GCS."""
     client = await _get_storage_client()
     if not client:
@@ -74,22 +77,7 @@ async def _fetch_remote_json(blob_name: str) -> Optional[dict]:
         content = blob.download_as_text()
         return json.loads(content)
     except Exception as e:
-        print(f"[Sync] Error fetching {blob_name}: {e}")
-        return None
-
-
-async def _fetch_json(url: str) -> Optional[dict]:
-    """Helper to fetch a JSON file over HTTP using httpx."""
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)
-            if response.status_code == 200:
-                return response.json()
-            else:
-                print(f"[Sync] HTTP error fetching {url}: {response.status_code}")
-                return None
-    except Exception as e:
-        print(f"[Sync] Exception fetching {url}: {e}")
+        logger.warning("[Sync] Error fetching %s: %s", blob_name, e)
         return None
 
 
@@ -106,7 +94,7 @@ async def get_remote_catalog() -> dict:
 def _load_local_manifest() -> dict:
     """Loads the local manifest from disk."""
     if os.path.exists(LOCAL_MANIFEST_PATH):
-        with open(LOCAL_MANIFEST_PATH, "r") as f:
+        with open(LOCAL_MANIFEST_PATH) as f:
             return json.load(f)
     return {"files": {}, "last_sync": None}
 
@@ -128,6 +116,21 @@ def is_course_available_locally(class_level: str, subject: str) -> bool:
     return course_id in local_manifest.get("files", {})
 
 
+def cache_path_for(filename: str) -> str:
+    """
+    Where a downloaded course file may be written.
+
+    The name comes from the remote manifest, which is fetched over plain HTTPS from a
+    configurable URL, so it is untrusted input: "../../.bashrc" would otherwise make the
+    download write outside the cache directory. Only a bare .parquet file name is accepted.
+    """
+    if not filename or filename != os.path.basename(filename) or os.path.isabs(filename):
+        raise ValueError(f"Registry file name {filename!r} is not a plain file name.")
+    if filename in (".", "..") or not filename.endswith(".parquet"):
+        raise ValueError(f"Registry file name {filename!r} is not a .parquet file.")
+    return os.path.join(config.CACHE_DIR, filename)
+
+
 def get_file_hash(filepath: str) -> str:
     """Calculates the SHA256 hash of a local file."""
     sha256_hash = hashlib.sha256()
@@ -141,7 +144,7 @@ async def download_course(class_level: str, subject: str) -> Tuple[bool, str]:
     """
     Downloads a specific course from the registry and imports it into LanceDB.
     """
-    print(f"[Sync] Downloading course: {class_level}/{subject}...")
+    logger.info(f"[Sync] Downloading course: {class_level}/{subject}...")
 
     # 1. Fetch remote manifest
     manifest = await _fetch_remote_json("manifest.json")
@@ -177,86 +180,97 @@ async def download_course(class_level: str, subject: str) -> Tuple[bool, str]:
                 f"the configured model, or change LOCAL_EMBEDDING_MODEL to match."
             )
     else:
-        print("[Sync] WARNING: registry manifest carries no embedding stamp — "
+        logger.warning("[Sync] Registry manifest carries no embedding stamp — "
               "it predates stamping. Import will be checked by dimension only.")
 
     # 3. Download the parquet file via GCS Client
     os.makedirs(config.CACHE_DIR, exist_ok=True)
-    temp_parquet = os.path.join(config.CACHE_DIR, file_info["filename"])
+    try:
+        temp_parquet = cache_path_for(file_info.get("filename", ""))
+    except ValueError as error:
+        return False, f"Refused by the device: {error}"
 
     try:
         client = await _get_storage_client()
         bucket = client.bucket(_registry_bucket_name())
         # The parquet files are at the root of the bucket, not in /courses
-        blob_name = file_info['filename']
+        blob_name = file_info["filename"]
         blob = bucket.blob(blob_name)
         blob.download_to_filename(temp_parquet)
     except Exception as e:
         return False, f"GCS Download failed: {e}"
 
-    # 4. Import into LanceDB
+    # The manifest states a sha256 per file; check it instead of merely recording it. This
+    # is what makes the manifest an integrity statement rather than a label: course content
+    # is read into the tutor's prompt, so a file altered in the bucket or in flight would
+    # otherwise be imported and used without a word.
+    expected_hash = file_info.get("hash")
+    if expected_hash:
+        actual_hash = get_file_hash(temp_parquet)
+        if actual_hash != expected_hash:
+            os.remove(temp_parquet)
+            logger.error("[Sync] Hash mismatch for %s: manifest %s, downloaded %s",
+                         blob_name, expected_hash, actual_hash)
+            return False, (
+                f"Refused: '{blob_name}' does not match the hash in the registry manifest. "
+                "The file was not imported."
+            )
+    else:
+        logger.warning("[Sync] Manifest carries no hash for %s; imported unverified.", blob_name)
+
+    # 4-5. Import into LanceDB and record it in the local manifest
     try:
-        df = pd.read_parquet(temp_parquet)
-        db = get_db()
-
-        # list_table_names, never db.list_tables(): on lancedb 0.30.2 the latter
-        # returns a response model whose __contains__ never matches, so the
-        # replace branch below was dead in Akili.
-        all_tables = lance_driver.list_table_names(db)
-        if "edu_registry" not in all_tables:
-            try:
-                db.create_table("edu_registry", data=df)
-            except Exception:
-                # If it was created by another thread just in time, just open it
-                table = db.open_table("edu_registry")
-                table.delete(f"class_level = '{class_level}' AND subject = '{subject}'")
-                table.add(df)
-        else:
-            table = db.open_table("edu_registry")
-            # Replace old entries for this class/subject
-            table.delete(f"class_level = '{class_level}' AND subject = '{subject}'")
-            table.add(df)
-
-        # Record which embedder produced these vectors, so a later model change
-        # is refused with a readable message instead of degrading silently.
-        lance_driver.write_stamp("edu_registry")
-
+        import_course_parquet(temp_parquet, class_level, subject, file_info.get("hash", ""))
         # Cleanup temp file
         os.remove(temp_parquet)
     except Exception as e:
         return False, f"Import into LanceDB failed: {e}"
 
-    # 5. Update local manifest
-    local_manifest = _load_local_manifest()
-    local_manifest["files"][course_id] = {
-        "class": class_level,
-        "subject": subject,
-        "hash": file_info.get("hash", ""),
-        "downloaded_at": __import__("datetime").datetime.now().isoformat()
-    }
-    _save_local_manifest(local_manifest)
-
     return True, f"Course '{class_level} — {subject}' successfully downloaded and imported."
 
 
-async def download_prompts() -> Tuple[bool, str]:
-    """Downloads and saves prompts from the registry. Not called anywhere (as in Akili)."""
-    manifest = await _fetch_json(config.REGISTRY_MANIFEST_URL)
-    if not manifest or "prompts" not in manifest:
-        return False, "No prompts section found in registry manifest."
+def import_course_parquet(parquet_path: str, class_level: str, subject: str, file_hash: str = "") -> int:
+    """
+    Import one course parquet into the local L3 registry and record it as downloaded.
 
-    prompts_info = manifest["prompts"]
-    prompts_data = await _fetch_json(prompts_info["url"])
-    if not prompts_data:
-        return False, "Could not download prompts."
+    Extracted from download_course, unchanged, so the demo preparation can import a
+    registry built locally (cloud_registry/registry/) through the exact same path as a
+    course downloaded from the bucket. Returns the number of rows imported.
+    """
+    df = pd.read_parquet(parquet_path)
+    db = get_db()
 
-    prompts_path = os.path.join(
-        os.path.dirname(config.LANCE_DB_PATH), "prompts.json"
-    )
-    with open(prompts_path, "w", encoding="utf-8") as f:
-        json.dump(prompts_data, f, indent=2, ensure_ascii=False)
+    # list_table_names, never db.list_tables(): on lancedb 0.30.2 the latter
+    # returns a response model whose __contains__ never matches, so the
+    # replace branch below was dead in Akili.
+    all_tables = lance_driver.list_table_names(db)
+    if "edu_registry" not in all_tables:
+        try:
+            db.create_table("edu_registry", data=df)
+        except Exception:
+            # If it was created by another thread just in time, just open it
+            table = db.open_table("edu_registry")
+            table.delete(f"class_level = '{class_level}' AND subject = '{subject}'")
+            table.add(df)
+    else:
+        table = db.open_table("edu_registry")
+        # Replace old entries for this class/subject
+        table.delete(f"class_level = '{class_level}' AND subject = '{subject}'")
+        table.add(df)
 
-    return True, "Prompts updated successfully."
+    # Record which embedder produced these vectors, so a later model change
+    # is refused with a readable message instead of degrading silently.
+    lance_driver.write_stamp("edu_registry")
+
+    local_manifest = _load_local_manifest()
+    local_manifest["files"][f"{class_level}_{subject}"] = {
+        "class": class_level,
+        "subject": subject,
+        "hash": file_hash,
+        "downloaded_at": __import__("datetime").datetime.now().isoformat()
+    }
+    _save_local_manifest(local_manifest)
+    return len(df)
 
 
 async def sync_with_registry() -> Tuple[bool, str]:
@@ -268,7 +282,7 @@ async def sync_with_registry() -> Tuple[bool, str]:
     everything is already current, so "Check for Updates" raised on every press
     after the first. The duplicate is gone rather than patched.
     """
-    print("Starting synchronization with Akili registry...")
+    logger.info("Starting synchronization with Akili registry...")
 
     prompts_path = os.path.join(
         os.path.dirname(config.LANCE_DB_PATH), "prompts.json"

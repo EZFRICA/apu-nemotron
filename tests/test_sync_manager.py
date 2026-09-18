@@ -18,16 +18,12 @@ from apu.sync import sync_manager
 
 @pytest.fixture
 def stub_fetch(monkeypatch):
-    """Replace both fetchers; returns a dict you can mutate per test."""
-    state = {"manifest": None, "blob": None}
-
-    async def fake_fetch_json(url):
-        return state["manifest"]
+    """Replace the registry fetcher; returns a dict you can mutate per test."""
+    state = {"blob": None}
 
     async def fake_fetch_remote_json(blob_name):
         return state["blob"]
 
-    monkeypatch.setattr(sync_manager, "_fetch_json", fake_fetch_json)
     monkeypatch.setattr(sync_manager, "_fetch_remote_json", fake_fetch_remote_json)
     return state
 
@@ -123,7 +119,21 @@ async def test_missing_gcs_credentials_make_the_registry_unreachable_not_a_crash
     assert "Unable to reach the registry" in msg
 
 
-def test_sync_with_registry_has_no_duplicate_of_download_prompts():
+def test_the_prompt_refresh_reads_only_through_the_authenticated_client():
+    """
+    The registry sets the tutor's system prompt, so it is fetched through the GCS client
+    against the configured bucket. An earlier `download_prompts` followed a URL taken from
+    the manifest itself over plain HTTP, which let the manifest redirect the prompt
+    anywhere; it was removed rather than kept unused.
+    """
+    source = inspect.getsource(sync_manager)
+    assert not hasattr(sync_manager, "download_prompts"), "the URL-following path is gone"
+    assert not hasattr(sync_manager, "_fetch_json"), "no unauthenticated JSON fetcher remains"
+    assert "httpx" not in source, "nothing reads the registry over plain HTTP"
+    assert "_fetch_remote_json" in inspect.getsource(sync_manager.sync_with_registry)
+
+
+def test_sync_with_registry_has_no_duplicate_of_the_old_prompt_download():
     tree = ast.parse(textwrap.dedent(inspect.getsource(sync_manager.sync_with_registry)))
     assigned = {
         t.id for node in ast.walk(tree) if isinstance(node, ast.Assign)

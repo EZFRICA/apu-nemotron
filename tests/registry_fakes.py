@@ -27,24 +27,36 @@ def manifest(model="test/stub-embedder", dim=DIM, catalog=None, course="6eme_mat
 def course_rows(class_level="6eme", subject="math"):
     return [{
         "id": "ch1", "chapter": "ch1", "class_level": class_level, "subject": subject,
-        "block_type": "manual_chapter", "content": "Les fractions.",
+        "block_type": "manual_chapter", "content": "Fractions.",
         "keywords": "k", "vector": list(V_A),
     }]
 
 
 def install_fake_registry(monkeypatch, akili_paths, remote_manifest, rows=None,
-                          parquet_source=None):
+                          parquet_source=None, keep_manifest_hash=False):
     """
     Point apu.sync.sync_manager at a fake bucket.
 
-    The manifest fetch returns `remote_manifest`; a blob download writes `rows` as a
-    parquet, or copies `parquet_source` (a file produced by the real pipeline).
-    Returns the list of blob names requested, so a test can check where the client
-    reads from.
+    The manifest fetch returns `remote_manifest`; a blob download copies the course
+    parquet, built from `rows` or taken from `parquet_source` (a file produced by the real
+    pipeline). Returns the list of blob names requested, so a test can check where the
+    client reads from.
+
+    The parquet is built once, here, and the manifest's `hash` is set to its real sha256,
+    because the device verifies the downloaded file against it. Pass
+    keep_manifest_hash=True to leave the manifest's own value alone and exercise a
+    registry whose hash does not match what it serves.
     """
     from apu.sync import sync_manager
 
     requested = []
+    source = parquet_source
+    if source is None:
+        source = str(pathlib.Path(akili_paths["root"]) / "fake_registry_course.parquet")
+        pd.DataFrame(rows if rows is not None else course_rows()).to_parquet(source, index=False)
+    if not keep_manifest_hash:
+        for entry in remote_manifest.get("files", []):
+            entry["hash"] = sync_manager.get_file_hash(source)
 
     async def fake_fetch_remote_json(blob_name):
         requested.append(blob_name)
@@ -62,12 +74,7 @@ def install_fake_registry(monkeypatch, akili_paths, remote_manifest, rows=None,
 
         def download_to_filename(self, path):
             requested.append(self.name)
-            if parquet_source is not None:
-                shutil.copyfile(parquet_source, path)
-            else:
-                pd.DataFrame(rows if rows is not None else course_rows()).to_parquet(
-                    path, index=False
-                )
+            shutil.copyfile(source, path)
 
     class _Bucket:
         def blob(self, name):
