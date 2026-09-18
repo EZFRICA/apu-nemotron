@@ -61,6 +61,14 @@ CREATE INDEX IF NOT EXISTS escalation_snapshots_by_class
 """
 
 
+# Seconds a connection waits for a lock held by another writer before giving up.
+_BUSY_TIMEOUT_SECONDS = 5.0
+
+# Databases whose schema this process has already applied. The statements are idempotent,
+# but replaying them on every single call cost a write transaction per read.
+_schema_applied: set[str] = set()
+
+
 class EventNotFound(LookupError):
     pass
 
@@ -90,10 +98,21 @@ class EscalationStore:
     def _connect(self) -> sqlite3.Connection:
         path = self._db_path or config.ESCALATION_DB_PATH
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        connection = sqlite3.connect(path)
+        # timeout + WAL: the deferred-write thread and a teacher's page read the same file at
+        # the same time. In the default journal mode a writer locks out readers, and without
+        # a timeout a concurrent write fails immediately with "database is locked" instead of
+        # waiting the moment it takes.
+        # Checked before connecting, which creates the file: a database wiped under a
+        # running process (the demo reset does exactly that) needs its schema again.
+        existed = os.path.exists(path)
+        connection = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_SECONDS)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.executescript(_SCHEMA)
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute(f"PRAGMA busy_timeout = {int(_BUSY_TIMEOUT_SECONDS * 1000)}")
+        if path not in _schema_applied or not existed:
+            connection.executescript(_SCHEMA)
+            _schema_applied.add(path)
         return connection
 
     # ── events ───────────────────────────────────────────────────────────────
@@ -126,17 +145,60 @@ class EscalationStore:
             ).fetchall()
         return [_event_from_row(row) for row in rows]
 
-    def list_events_with_resolutions(
-        self, class_id: str
-    ) -> list[tuple[EscalationEvent, EscalationResolution | None]]:
+    def delete_events_before(self, cutoff: datetime) -> int:
+        """
+        Erase events (and their resolutions) triggered before `cutoff`. Returns how many.
+
+        These records are children's own messages, kept only so a teacher can act on a
+        pattern. Nothing expires on its own, so this is what an operator runs to hold a
+        retention period, and what answers a request to erase a pupil's history.
+        """
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT e.*, r.resolved_by, r.resolved_at, r.note "
-                "FROM escalation_events e "
-                "LEFT JOIN escalation_resolutions r ON r.event_id = e.event_id "
-                "WHERE e.class_id = ? ORDER BY e.triggered_at, e.event_id",
-                (class_id,),
-            ).fetchall()
+            connection.execute(
+                "DELETE FROM escalation_resolutions WHERE event_id IN "
+                "(SELECT event_id FROM escalation_events WHERE triggered_at < ?)",
+                (cutoff.isoformat(),),
+            )
+            cursor = connection.execute(
+                "DELETE FROM escalation_events WHERE triggered_at < ?", (cutoff.isoformat(),)
+            )
+            return cursor.rowcount
+
+    def delete_student_events(self, student_id: str) -> int:
+        """Erase one student's events and resolutions. Returns how many events were removed."""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM escalation_resolutions WHERE event_id IN "
+                "(SELECT event_id FROM escalation_events WHERE student_id = ?)",
+                (student_id,),
+            )
+            cursor = connection.execute(
+                "DELETE FROM escalation_events WHERE student_id = ?", (student_id,)
+            )
+            return cursor.rowcount
+
+    def count_events(self, class_id: str) -> int:
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT COUNT(*) FROM escalation_events WHERE class_id = ?", (class_id,)
+            ).fetchone()[0]
+
+    def list_events_with_resolutions(
+        self, class_id: str, limit: int | None = None, offset: int = 0
+    ) -> list[tuple[EscalationEvent, EscalationResolution | None]]:
+        """Oldest first. `limit` bounds the page; None returns the whole class."""
+        query = (
+            "SELECT e.*, r.resolved_by, r.resolved_at, r.note "
+            "FROM escalation_events e "
+            "LEFT JOIN escalation_resolutions r ON r.event_id = e.event_id "
+            "WHERE e.class_id = ? ORDER BY e.triggered_at, e.event_id"
+        )
+        params: list = [class_id]
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params += [limit, offset]
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
         results = []
         for row in rows:
             resolution = (

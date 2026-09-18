@@ -55,7 +55,8 @@ def cluster_class_events(
     labels = HDBSCAN(min_cluster_size=MIN_CLUSTER_SIZE, metric="cosine").fit(vectors).labels_
 
     members_by_label: dict[int, list[EscalationEvent]] = {}
-    for event, label in zip(class_events, labels):
+    # strict: one label per event by construction; a mismatch would silently drop events.
+    for event, label in zip(class_events, labels, strict=True):
         if int(label) == NOISE_LABEL:
             continue
         members_by_label.setdefault(int(label), []).append(event)

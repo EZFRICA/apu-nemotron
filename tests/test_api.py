@@ -32,7 +32,7 @@ def registry(monkeypatch):
 
 
 def event(event_id, class_id="lycee-cocody:3eA"):
-    return EscalationEvent(event_id, "eleve-1", class_id, "s1", 3, "Qui a gagné le match ?", T0)
+    return EscalationEvent(event_id, "eleve-1", class_id, "s1", 3, "Who won the match?", T0)
 
 
 @pytest.fixture
@@ -52,18 +52,18 @@ def as_user(requester_id, **headers):
 def test_a_teacher_is_scoped_to_their_class():
     scope = authorize_view("prof-kouassi", "lycee-cocody:3eA")
     assert (scope.role, scope.establishment_id, scope.class_id) == ("teacher", "lycee-cocody", "lycee-cocody:3eA")
-    with pytest.raises(PermissionError, match="périmètre du prof"):
+    with pytest.raises(PermissionError, match="teacher's scope"):
         authorize_view("prof-kouassi", "lycee-cocody:4eB")
 
 
 def test_an_admin_is_scoped_to_their_establishment():
     assert authorize_view("admin-cocody", "lycee-cocody:4eB").class_id is None
-    with pytest.raises(PermissionError, match="établissement de l'admin"):
+    with pytest.raises(PermissionError, match="admin's establishment"):
         authorize_view("admin-cocody", "college-yopougon:6eC")
 
 
 def test_an_unknown_requester_has_no_scope():
-    with pytest.raises(PermissionError, match="aucun rôle"):
+    with pytest.raises(PermissionError, match="no registered role"):
         authorize_view("intrus", "lycee-cocody:3eA")
 
 
@@ -132,13 +132,31 @@ def test_listing_is_authorized_from_the_registry(api, requester, class_id, statu
     assert client.get("/escalations", params={"class_id": class_id}, headers=as_user(requester)).status_code == status
 
 
+def test_listing_is_paged(api):
+    client, store = api
+    for index in range(5):
+        store.append_event(event(f"e-page-{index}"))
+
+    first = client.get("/escalations", params={"class_id": "lycee-cocody:3eA", "limit": 2},
+                       headers=as_user("prof-kouassi")).json()
+    assert first["total"] == 6 and first["limit"] == 2 and len(first["events"]) == 2
+
+    second = client.get("/escalations", params={"class_id": "lycee-cocody:3eA", "limit": 2, "offset": 2},
+                        headers=as_user("prof-kouassi")).json()
+    assert [e["event_id"] for e in second["events"]] != [e["event_id"] for e in first["events"]]
+
+    over_the_cap = client.get("/escalations", params={"class_id": "lycee-cocody:3eA", "limit": 10_000},
+                              headers=as_user("prof-kouassi"))
+    assert over_the_cap.status_code == 422, "the page size has a ceiling"
+
+
 # ── POST /escalations/{event_id}/resolve ─────────────────────────────────────
 
 def test_resolving_records_the_authenticated_requester(api):
     client, store = api
     response = client.post(
         "/escalations/e-3eA/resolve",
-        json={"note": "vu avec l'élève", "resolved_by": "admin-cocody"},
+        json={"note": "talked it through with the student", "resolved_by": "admin-cocody"},
         headers=as_user("prof-kouassi"),
     )
     assert response.status_code == 201
@@ -146,7 +164,7 @@ def test_resolving_records_the_authenticated_requester(api):
 
     [(stored, resolution)] = store.list_events_with_resolutions("lycee-cocody:3eA")
     assert stored == event("e-3eA"), "the event itself is untouched"
-    assert resolution.note == "vu avec l'élève"
+    assert resolution.note == "talked it through with the student"
 
     listed = client.get("/escalations", params={"class_id": "lycee-cocody:3eA"}, headers=as_user("prof-kouassi"))
     assert listed.json()["events"][0]["status"] == "resolved"
@@ -179,12 +197,12 @@ def test_clusters_are_read_from_the_last_snapshot_and_never_computed(api):
     assert store.latest_snapshot("lycee-cocody:3eA") is None, "reading did not compute anything"
 
     store.save_snapshot(EscalationClusterSnapshot(
-        "lycee-cocody:3eA", T0, [EscalationCluster(0, ["e-3eA", "e-x"], "Qui a gagné le match ?")]
+        "lycee-cocody:3eA", T0, [EscalationCluster(0, ["e-3eA", "e-x"], "Who won the match?")]
     ), events_covered=2)
     body = client.get("/escalations/clusters", params={"class_id": "lycee-cocody:3eA"}, headers=as_user("prof-kouassi")).json()
     assert body["computed_at"] == T0.isoformat()
     assert body["clusters"] == [{"cluster_id": 0, "size": 2, "event_ids": ["e-3eA", "e-x"],
-                                 "representative_text": "Qui a gagné le match ?"}]
+                                 "representative_text": "Who won the match?"}]
 
 
 def test_clusters_of_another_class_are_forbidden(api):

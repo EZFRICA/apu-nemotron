@@ -24,6 +24,13 @@ ESCALATION_CLUSTER_RECOMPUTE = "escalation_cluster_recompute"
 
 _registration_lock = threading.Lock()
 
+# Classes whose recomputation is queued but has not run yet. Without it, every event
+# arriving while a recomputation is pending (or while a failing one is being retried)
+# queues another one for the same class, since the count only drops when a snapshot
+# is finally stored.
+_queued_recomputes: set[str] = set()
+_queued_lock = threading.Lock()
+
 
 def recompute_class_snapshot(
     class_id: str, store: EscalationStore, embed_texts: EmbedTexts | None = None
@@ -42,15 +49,31 @@ def register_escalation_jobs(
     store_factory=EscalationStore,
     embed_texts: EmbedTexts | None = None,
 ) -> None:
+    with _queued_lock:
+        # A fresh registration is a fresh scheduler: nothing it queued is still pending.
+        _queued_recomputes.clear()
+
     def write_event(payload: dict) -> None:
         event: EscalationEvent = payload["event"]
         store = store_factory()
         store.append_event(event)
-        if store.events_since_last_snapshot(event.class_id) >= config.ESCALATION_CLUSTER_TRIGGER_COUNT:
-            scheduler.submit(ESCALATION_CLUSTER_RECOMPUTE, {"class_id": event.class_id})
+        if store.events_since_last_snapshot(event.class_id) < config.ESCALATION_CLUSTER_TRIGGER_COUNT:
+            return
+        with _queued_lock:
+            if event.class_id in _queued_recomputes:
+                return   # one is already queued for this class; it will cover this event too
+            _queued_recomputes.add(event.class_id)
+        scheduler.submit(ESCALATION_CLUSTER_RECOMPUTE, {"class_id": event.class_id})
 
     def recompute(payload: dict) -> None:
-        recompute_class_snapshot(payload["class_id"], store_factory(), embed_texts)
+        class_id = payload["class_id"]
+        try:
+            recompute_class_snapshot(class_id, store_factory(), embed_texts)
+        finally:
+            # Cleared even when the job failed, so the next event can queue a fresh
+            # attempt rather than leaving the class without clusters for good.
+            with _queued_lock:
+                _queued_recomputes.discard(class_id)
 
     scheduler.register(ESCALATION_EVENT_WRITE, write_event)
     scheduler.register(ESCALATION_CLUSTER_RECOMPUTE, recompute)

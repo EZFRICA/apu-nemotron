@@ -10,7 +10,7 @@ from apu.guardrails.policy import parse_class_id
 class EscalationEvent:
     event_id: str
     student_id: str
-    class_id: str  # "etablissement_id:classe_code"
+    class_id: str  # "establishment_id:class_code"
     session_id: str
     attempt_number_in_session: int
     off_topic_request_text: str

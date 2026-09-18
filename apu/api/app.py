@@ -4,24 +4,29 @@
 
 Every route authorizes through authorize_view before reading or writing anything, and the
 requester's role and scope always come from the assignment registry, never from the request.
+The operations themselves live in apu.api.service, shared with the demo interface.
 
 AUTHENTICATION IS A STUB (apu.auth.identity): the requester id is read from a plain
 X-Requester-Id header. Not secure; see that module before deploying anything.
 """
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
+from apu.api import service
 from apu.auth import assignments
-from apu.auth.authorization import authorize_view
 from apu.auth.identity import requester_id_from_header
 from apu.escalation.jobs import ensure_escalation_jobs_registered
 from apu.escalation.models import EscalationEvent, EscalationResolution
 from apu.mmu.escalation_store import AlreadyResolved, EscalationStore, EventNotFound
+
+# The API is unversioned while it is pre-1.0 and consumed only by this repository's own
+# interface. Give it a /v1 prefix before anyone else integrates against it.
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
 
 
 class ResolveRequest(BaseModel):
@@ -31,7 +36,7 @@ class ResolveRequest(BaseModel):
     note: str | None = None
 
 
-def _resolution_to_dict(resolution: EscalationResolution | None) -> dict | None:
+def resolution_to_dict(resolution: EscalationResolution | None) -> dict | None:
     if resolution is None:
         return None
     return {
@@ -42,7 +47,7 @@ def _resolution_to_dict(resolution: EscalationResolution | None) -> dict | None:
     }
 
 
-def _event_to_dict(event: EscalationEvent, resolution: EscalationResolution | None) -> dict:
+def event_to_dict(event: EscalationEvent, resolution: EscalationResolution | None) -> dict:
     return {
         "event_id": event.event_id,
         "student_id": event.student_id,
@@ -53,7 +58,7 @@ def _event_to_dict(event: EscalationEvent, resolution: EscalationResolution | No
         "off_topic_request_text": event.off_topic_request_text,
         "triggered_at": event.triggered_at.isoformat(),
         "status": "resolved" if resolution else "open",
-        "resolution": _resolution_to_dict(resolution),
+        "resolution": resolution_to_dict(resolution),
     }
 
 
@@ -72,19 +77,27 @@ def create_app(*, store_factory=EscalationStore) -> FastAPI:
         return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": str(error)})
 
     @app.get("/escalations")
-    def list_escalations(class_id: str, requester_id: str = Depends(requester_id_from_header)) -> dict:
-        authorize_view(requester_id, class_id)
-        events = store_factory().list_events_with_resolutions(class_id)
+    def list_escalations(
+        class_id: str,
+        limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+        offset: int = Query(default=0, ge=0),
+        requester_id: str = Depends(requester_id_from_header),
+    ) -> dict:
+        # Paged, always: a class accumulates events for a whole year, and a route that
+        # returns "everything" is a route that one day returns everything.
+        store = store_factory()
+        events = service.list_escalations(requester_id, class_id, store, limit=limit, offset=offset)
         return {
             "class_id": class_id,
-            "events": [_event_to_dict(event, resolution) for event, resolution in events],
+            "total": service.count_escalations(requester_id, class_id, store),
+            "limit": limit,
+            "offset": offset,
+            "events": [event_to_dict(event, resolution) for event, resolution in events],
         }
 
     @app.get("/escalations/clusters")
     def escalation_clusters(class_id: str, requester_id: str = Depends(requester_id_from_header)) -> dict:
-        authorize_view(requester_id, class_id)
-        # Read only: clusters are computed by the deferred job, never on this path.
-        snapshot = store_factory().latest_snapshot(class_id)
+        snapshot = service.latest_clusters(requester_id, class_id, store_factory())
         if snapshot is None:
             return {"class_id": class_id, "computed_at": None, "clusters": []}
         return {
@@ -107,48 +120,28 @@ def create_app(*, store_factory=EscalationStore) -> FastAPI:
         body: ResolveRequest | None = None,
         requester_id: str = Depends(requester_id_from_header),
     ) -> dict:
-        # A requester with no role learns nothing, not even whether the event exists.
-        if assignments.lookup_assignment(requester_id) is None:
-            raise PermissionError(f"{requester_id} n'a aucun rôle enregistré.")
-        store = store_factory()
-        event = store.get_event(event_id)
-        if event is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown escalation event.")
-        authorize_view(requester_id, event.class_id)
-
-        resolution = EscalationResolution(
-            event_id=event_id,
-            resolved_by=requester_id,
-            resolved_at=datetime.now(UTC),
-            note=body.note if body else None,
-        )
         try:
-            store.add_resolution(resolution)
-        except AlreadyResolved:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Event already resolved.")
-        except EventNotFound:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown escalation event.")
-        return _resolution_to_dict(resolution)
+            resolution = service.resolve_escalation(
+                requester_id, event_id, body.note if body else None, store_factory()
+            )
+        except EventNotFound as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Unknown escalation event."
+            ) from error
+        except AlreadyResolved as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Event already resolved."
+            ) from error
+        return resolution_to_dict(resolution)
 
     @app.get("/establishments/{establishment_id}/classes")
     def establishment_classes(
         establishment_id: str, requester_id: str = Depends(requester_id_from_header)
     ) -> dict:
-        assignment = assignments.lookup_assignment(requester_id)
-        if assignment is None:
-            raise PermissionError(f"{requester_id} n'a aucun rôle enregistré.")
-        if assignment.establishment_id != establishment_id:
-            raise PermissionError("Établissement hors du périmètre du demandeur.")
-        # Derived from the assignment registry, not from class policies; each class listed
-        # only if authorize_view accepts it for this requester (admin: all, teacher: own).
-        visible = []
-        for class_id in assignments.get_assignment_registry().classes_in_establishment(establishment_id):
-            try:
-                authorize_view(requester_id, class_id)
-            except PermissionError:
-                continue
-            visible.append(class_id)
-        return {"establishment_id": establishment_id, "classes": visible}
+        return {
+            "establishment_id": establishment_id,
+            "classes": service.visible_classes(requester_id, establishment_id),
+        }
 
     return app
 
