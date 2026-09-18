@@ -62,7 +62,7 @@ def main() -> int:
 
     t0 = time.time()
     model = TextEmbedding(model_name=args.model, cache_dir=args.cache_dir)
-    vector = next(iter(model.embed(["vérification du modèle"])))
+    vector = next(iter(model.embed(["model check"])))
     elapsed = time.time() - t0
 
     dim = len(vector)

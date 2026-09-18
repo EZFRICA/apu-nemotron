@@ -64,7 +64,6 @@ Every command runs through [uv](https://docs.astral.sh/uv/), from the repository
   uv downloads Python 3.13 by itself if it is not already on the machine.
 - **A Nebius Token Factory API key**, from https://tokenfactory.nebius.com/ (hackathon credits: see the comment at the top of `.env.example`).
 - **About 300 MB of disk** for the local embedding model, and a network connection for this first setup. After setup, only the Nemotron calls need the network.
-- **liblouis**, only for braille output: `brew install liblouis` (macOS) or `apt install liblouis20` (Debian/Ubuntu). Everything else works without it.
 
 ### 2. Get the code and install the dependencies
 
@@ -106,7 +105,10 @@ Then open `.env` and set `NEBIUS_API_KEY`. That is the only required value; ever
 | `TAVILY_API_KEY` | *(none)* | Web search; credits come with the hackathon promo bundle |
 | `APU_CLASS_POLICIES_PATH` | `registries/class_policies.json` | Per-class policy: escalation threshold, extra excluded search domains |
 | `APU_TEACHER_ASSIGNMENTS_PATH` | `registries/teacher_assignments.json` | Who teaches or administers which class; the only source of roles |
-| `APU_STUDENT_ID` / `APU_CLASS_ID` | `eleve-demo` / `lycee-cocody:3eA` | Identity the dashboard uses for every session (stub, no login) |
+| `APU_STUDENT_ID` / `APU_CLASS_ID` | `eleve-aya` / `lycee-cocody:3eA` | Identity the interface opens with; the sidebar switches it (stub, no login) |
+| `APU_ESCALATION_CLUSTER_TRIGGER_COUNT` | `5` | New events in a class before its clusters are recomputed in the background |
+| `APU_DEMO_STUDENTS_PATH` | `registries/demo_students.json` | Demo students offered by the identity selector (stub) |
+| `TAVILY_MAX_RESULTS` | `5` | Results kept per web search |
 
 ### 4. Fetch the embedding model (once, needs the network)
 
@@ -126,7 +128,7 @@ Course chapters reach the tutor through a **cloud registry**: Markdown courses a
 gcloud auth application-default login
 ```
 
-or set `GOOGLE_APPLICATION_CREDENTIALS` in `.env` to a service-account JSON with read access to the bucket. Then, in the interface (step 7), pick a grade and a subject in the sidebar and click **Download & Activate**. **Check for Updates** refreshes the system prompts from the registry. Courses stay usable offline once downloaded.
+or set `GOOGLE_APPLICATION_CREDENTIALS` in `.env` to a service-account JSON with read access to the bucket. Then, in the interface (step 7), open **📚 Active course** on the student page, click **Browse the cloud registry**, pick a course and click **⬇️ Download and activate**. **🔄 Check for updates (prompts)** refreshes the system prompts from the registry. Courses stay usable offline once downloaded.
 
 **Publishing your own registry (maintainer).** Chapters live in `cloud_registry/courses/<grade>/<subject>/*.md`, the list of grades and subjects in `cloud_registry/config/curriculum.yaml`, the tutor prompts in `cloud_registry/courses/prompts/`. Build the registry locally into `cloud_registry/registry/` to inspect it:
 
@@ -153,45 +155,82 @@ The suite needs neither the API key nor the network: the Nebius client is replac
 ### 7. Launch the interface
 
 ```bash
-uv run streamlit run apu/ui/dashboard.py
+uv run streamlit run apu/ui/app.py
 ```
 
-Streamlit prints a local URL, `http://localhost:8501` by default; open it in a browser. On the very first run Streamlit may ask for an email address in the terminal: press Enter to skip.
+Streamlit prints a local URL, `http://localhost:8501` by default: open it in a browser. The project's `.streamlit/config.toml` runs it headless (no browser auto-open, no first-run prompt, no usage statistics) with a dark theme.
 
-What you get:
+What you get, in three pages:
 
-- **Right, the chat.** Each question goes to Nemotron Super for the answer, then to Nemotron Nano for memory extraction. Both calls finish before the answer is displayed, so a turn takes the time of the two calls together.
-- **Left, the memory hierarchy while it works.** L1 shows the blocks hot in RAM with their hit rate, L2 the DLL chain in HEAD → TAIL order with each block's type, L3 the LanceDB tables and their row counts.
-- **Sidebar.** Course selection from the cloud registry (**Download & Activate**, or **Activate** for a course already on the device), the number of past exchanges sent to the model (0 means memory only), **Check for Updates** and **Reset Memory**. When the registry cannot be reached, the courses already downloaded are still offered.
+- **Student.** The tutor chat. Every question first goes through the topical guard (Nemotron Super), then gets its answer (Nemotron Super, with Tavily web search when the model needs it) and the memory extraction (Nemotron Nano), all before the answer is displayed. Above the chat: the off-topic counter against the class threshold, and the guard's last verdict. Under each answer, **💾 Save to notebook** keeps it in the student's notebook. Tabs show the notebook and its revision sheets, the last turn's searches and sources, and the memory hierarchy (L1 cache, L2 DLL chain, L3 LanceDB tables). The **📚 Active course** panel activates a local course, downloads one from the cloud registry (**Browse the cloud registry**, **⬇️ Download and activate**), refreshes prompts, and resets the student's memory.
+- **Teacher / Admin.** A class's escalations (resolve with a note), their clusters, and an access-control check that shows a refusal outside the person's scope.
+- **Demo setup.** Environment checks, live tests of Nemotron and Tavily, and demo data preparation.
 
-Useful variants:
+The sidebar's **Sign in as** switches between demo students, teachers and admins. It is a stub, not authentication: see [Live demo](#live-demo).
+
+To use another port:
 
 ```bash
-uv run streamlit run apu/ui/dashboard.py --server.port 8502
+uv run streamlit run apu/ui/app.py --server.port 8502
 ```
-
-```bash
-uv run streamlit run apu/ui/dashboard.py --server.headless true
-```
-
-The first picks another port; the second is for a remote machine or server, where Streamlit should not try to open a browser.
 
 ### 8. Where state lives, and how to reset it
 
-Everything the device holds is under `data/` (gitignored): `data/memory/metadata_links.json` is the DLL (L2), `data/akili_db/` the LanceDB store (L3: downloaded courses in `edu_registry`, archived student memory in `user_memory`), `data/local_manifest.json` the list of downloaded courses, `data/prompts.json` the system prompts from the registry. **Reset Memory** in the sidebar wipes L1 and L2; rows already archived in L3 stay. To start completely from scratch, stop Streamlit and delete the directory:
+Everything the device holds is under `data/` (gitignored): `data/memory/metadata_links.json` is the DLL (L2), `data/akili_db/` the LanceDB store (L3: downloaded courses in `edu_registry`, archived student memory in `user_memory`), `data/local_manifest.json` the list of downloaded courses, `data/prompts.json` the system prompts from the registry, `data/escalations.sqlite3` the escalation events, `data/notebook.sqlite3` the student notebooks. **🗑️ Reset the student's memory (L1 + L2)** (student page) wipes L1 and L2; rows already archived in L3 stay. To reset everything and reload demo data, use the demo preparation (below), or stop Streamlit and delete the directory:
 
 ```bash
 rm -rf data
 ```
 
+The runtime log is `data/apu_runtime.log`, at INFO. It is deliberately not DEBUG: this file
+outlives the process and the users are minors, and DEBUG carries block contents.
+
+### 9. Student data: what is kept, what leaves the device
+
+| What | Where | Who reads it | How to erase it |
+| --- | --- | --- | --- |
+| Questions and answers of the current conversation | In memory only, in the browser session | The student | Reload the page |
+| Profile, preferences, current session (extracted by Nemotron Nano) | `data/memory/`, `data/akili_db/` (this device) | The tutor, on the next turn | **🗑️ Reset the student's memory** on the student page |
+| Notebook entries | `data/notebook.sqlite3` | The student only; never the tutor | 🗑️ on each entry, or `scripts/purge_data.py --student <id>` |
+| Escalation events (the off-topic message, the pupil id, the moment) | `data/escalations.sqlite3` | The class's teacher and the school admin, through the API's authorization | `scripts/purge_data.py` |
+
+Two things leave the device: **every question goes to Nebius Token Factory** (the guard's
+classification, the answer, the memory extraction), and **a web search sends its query to
+Tavily**. The query is written by the model from the question; the tutor is instructed never
+to put the student's memory into it, and the interface shows every query it sent. Nothing
+else is uploaded: the notebook, the escalations and the memory stay on the device.
+
+Nothing expires on its own. A school running this owes itself a retention period; this is
+what runs it, from cron or by hand:
+
+```bash
+uv run python scripts/purge_data.py --older-than-days 180
+```
+
 ### Troubleshooting
 
-- **`Inference failed: NEBIUS_API_KEY is not set` in the chat.** Set the key in `.env`, then stop Streamlit (Ctrl+C) and launch it again.
+- **`⚠️ This turn could not be completed: NEBIUS_API_KEY is not set` in the chat.** Set the key in `.env`, then stop Streamlit (Ctrl+C) and launch it again. The **Demo setup** page checks every key and dependency at a glance.
 - **`Embedding model ... is not present in ...`.** Step 4 was not run, or `LOCAL_EMBEDDING_CACHE_DIR` points to the wrong place.
 - **"Registry unreachable" in the sidebar.** The device could not read the registry bucket: no Google credentials (step 5), no network, or a wrong `REGISTRY_MANIFEST_URL`. The terminal running Streamlit prints the exact reason (`[Sync] Auth failed: ...`). Courses already downloaded remain available.
 - **"This registry was built with '...'" when downloading.** The registry and this device use different embedding models; align `LOCAL_EMBEDDING_MODEL` with the registry's, or republish the registry.
 - **`Port 8501 is already in use`.** Use `--server.port` as shown above.
-- **`Inference failed: The topical guard could not classify this turn`.** Every question first goes through the topical guard, which calls Nemotron on Token Factory. Same fix as a missing or invalid `NEBIUS_API_KEY`. The tutor deliberately does not answer when the guard cannot run.
+- **`⚠️ This turn could not be completed: The topical guard could not classify this turn`.** Every question first goes through the topical guard, which calls Nemotron on Token Factory. Same fix as a missing or invalid `NEBIUS_API_KEY`. The tutor deliberately does not answer when the guard cannot run.
+
+## Live demo
+
+The full run sheet is in [DEMO.md](./DEMO.md). In short:
+
+1. With `.env` holding `NEBIUS_API_KEY` and `TAVILY_API_KEY`, prepare the demo data. This resets the local state under `data/`, builds and imports the courses locally (no Google credentials), and seeds example escalations with their clusters:
+   ```bash
+   uv run python scripts/prepare_demo.py
+   ```
+2. Launch the interface and open the printed URL:
+   ```bash
+   uv run streamlit run apu/ui/app.py
+   ```
+3. Check **Demo setup**: every line should be ✅, and the two live tests should answer.
+
+> **Identity is simulated.** The sidebar lets anyone act as any demo student, teacher or admin, with no password. What the chosen person can see and do is real: it comes from `registries/` through the same service functions as the API.
 
 ## Guardrails, escalations and the teacher API
 
@@ -235,15 +274,13 @@ curl -H "X-Requester-Id: admin-cocody" http://127.0.0.1:8000/establishments/lyce
 
 > **⚠️ Authentication is a stub and is not secure.** The requester is whoever the `X-Requester-Id` header says, with no password or token: anyone who can reach the API can act as any teacher or admin. Authorization from the registry is real; identity is not. See `apu/auth/identity.py` before deploying anything.
 
-### Braille
+### Student notebook
 
-`apu/modality/braille/` translates with liblouis (French BFU or English UEB, grade 1 or grade 2) into Unicode braille or embosser encoding (Braille ASCII / BRF), and includes a simulated embosser. liblouis is a C library installed by the system, not by uv:
+During a conversation the student keeps what matters to them in a notebook (`apu/notebook/`), and revision sheets are made from it. Each save keeps one of three things, the student's choice: the **full answer**, its **key points** (condensed by Nemotron Nano, using only what the answer says), or an **excerpt** the student picks.
 
-```bash
-brew install liblouis
-```
-
-On Debian/Ubuntu: `apt install liblouis20`. Without it, the braille tests are skipped.
+- **Two ways to save.** The **💾 Save to notebook** control under each answer, or by asking the tutor ("save the key points", "just keep the rule for adding fractions"): Nemotron Super calls the `save_to_notebook` tool. The tool is offered only on turns the guard validated, and the entry is filed under the student of the guard session, never a student named by the model.
+- **Revision sheets.** In the **📓 Notebook** tab, pick entries, then generate a sheet from them as written, or from a revision summary Nemotron Super writes from them, and download it.
+- **The tutor never reads the notebook.** No entry is ever put into a prompt, and the store is its own SQLite file, apart from the DLL and L3. A test checks that saved text never reaches a model call.
 
 ## Repository layout
 
@@ -255,6 +292,7 @@ apu/
     nebius_client.py       # Nebius Token Factory client, main + extraction call wrappers
   runtime/
     agent.py               # LangGraph planner: retrieval, prompt, Nemotron calls, memory write-back
+    prompts.py             # the registry's system prompts, validated before they are used
   mmu/
     dll.py                 # doubly linked list of memory blocks, LRU paging, BMJ routing
     cache_l1.py            # L1 in-process cache with per-type TTL
@@ -284,15 +322,23 @@ apu/
     identity.py            # AUTHENTICATION STUB, not secure
   api/
     app.py                 # FastAPI teacher/admin routes
+  notebook/
+    store.py               # notebook entries (full answer, key points, excerpt), SQLite
+    service.py             # saving, key points (Nano), revision summary (Super)
   tools/
     web_search.py          # Tavily search, only for guard-validated turns
+    notebook.py            # save_to_notebook tool, only for guard-validated turns
   modality/
-    mode.py citations.py   # interaction modes, source citations per output channel
-    braille/               # liblouis translator, embosser simulator
+    citations.py           # web search sources appended to an answer
+    plain_text.py          # strips Markdown and math delimiters from notebook entries
   sync/
     sync_manager.py        # device side of the cloud registry: catalog, course download, prompts
   ui/
-    dashboard.py           # Streamlit APU Control Center (uv run streamlit run apu/ui/dashboard.py)
+    app.py                 # Streamlit demo interface (uv run streamlit run apu/ui/app.py)
+    common.py              # identity selector (stub), guard session, rendering helpers
+    views/                 # student.py, teacher.py, demo.py
+  demo/
+    seed.py                # demo data preparation, reset, environment checks
 cloud_registry/            # publishing side of the course registry (see its README)
   config/                  # curriculum.yaml, publishing settings
   courses/                 # Markdown chapters per grade/subject, tutor prompts
@@ -300,11 +346,43 @@ cloud_registry/            # publishing side of the course registry (see its REA
 scripts/
   fetch_embedding_model.py # one-time download of the ONNX embedding model
   smoke_test_tool_calling.py # checks native tool calling on Token Factory (see HACKATHON.md)
-registries/                # demo class policies and teacher assignments, loaded at startup
+  prepare_demo.py          # resets local state, loads courses locally, seeds example escalations
+.streamlit/config.toml     # headless, no telemetry, dark theme
+registries/                # demo class policies, teacher assignments and demo students
+DEMO.md                    # live demo run sheet
 tests/                     # pytest suite, offline, no API key
 docs/
   architecture.md          # links to the fuller write-up of the underlying design
 ```
+
+## Known limits
+
+Stated rather than hidden. None of these is a surprise; each is a decision with its reason.
+
+- **The tutoring memory belongs to the device, not to the student.** The DLL, the L1 cache
+  and the archived rows are keyed per device, as in the original design (one tablet, one
+  pupil). The notebook and the escalations, added here, are per student. Because the demo's
+  sidebar switches pupils on one machine, the interface wipes L1 and L2 whenever the person
+  changes. Serving several pupils from one process would need the memory keyed by student
+  first.
+- **There is no authentication.** The interface hands out the teacher and admin views to
+  whoever opens the page, and the API believes the `X-Requester-Id` header. Authorization is
+  real (it comes from the registry, never from the request); identity is not. The interface
+  therefore binds to localhost only (`.streamlit/config.toml`).
+- **One student at a time.** Storage calls are `async def` but do blocking I/O, so several
+  concurrent students would serialise on the event loop. Model calls do run in worker
+  threads. This is fine for one tablet and would need revisiting behind a shared server.
+- **No rate limiting.** Nothing bounds how many turns a student takes, and each one costs at
+  least two model calls. The notebook is capped (entries per student, entries per sheet);
+  turns are not.
+- **The API is unversioned** while it is pre-1.0 and consumed only by this repository's own
+  interface. Listing is paged; give it a `/v1` prefix before anyone else integrates.
+- **The registry is trusted infrastructure.** It ships the tutor's system prompt and the
+  course content that goes into it. Downloads are checked against the manifest's sha256 and
+  prompts are validated before use (shape and size), but a legitimate registry that is
+  compromised can still change what the tutor is.
+- **Clustering is fragile on small or varied classes** — measured, with numbers, in
+  `HACKATHON.md`.
 
 ## Status
 

@@ -183,7 +183,7 @@ def export_prompts() -> str:
 def generate_manifest(curriculum: dict, base_url: str, prompts_path: str = "") -> None:
     """
     Generates manifest.json with:
-      - catalog: {class: [subjects]}        ← used by the dashboard for selectboxes
+      - catalog: {class: [subjects]}        ← used by the interface for course selection
       - embedding: {model, dim}             ← checked by the device before a download
       - files: [{id, class, subject, url, hash, size_bytes, ...}]
       - prompts: {url, hash}
@@ -309,12 +309,12 @@ def upload_to_gcs(bucket_name: str) -> None:
 
 async def main(upload: bool = False):
     # Load curriculum
-    with open(CURRICULUM_PATH, "r", encoding="utf-8") as f:
+    with open(CURRICULUM_PATH, encoding="utf-8") as f:
         curriculum = yaml.safe_load(f)
 
     classes = curriculum.get("classes", {})
     print(f"\n{'='*60}")
-    print(f"  AKILI BATCH PIPELINE")
+    print("  AKILI BATCH PIPELINE")
     print(f"  Classes: {list(classes.keys())}")
     print(f"{'='*60}\n")
 
@@ -350,7 +350,7 @@ async def main(upload: bool = False):
         print("\nSTEP 4 — GCS upload skipped. Run with --upload to push to cloud.\n")
 
     print(f"\n{'='*60}")
-    print(f"  PIPELINE COMPLETE")
+    print("  PIPELINE COMPLETE")
     print(f"  Registry files are in: {REGISTRY_DIR}")
     print(f"{'='*60}\n")
 

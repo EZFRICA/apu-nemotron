@@ -41,12 +41,12 @@ def sha256(filepath: str) -> str:
 def generate_manifest(base_url: str = "https://storage.googleapis.com/akili-registry"):
     """
     Scans registry/ for .parquet files and builds manifest.json.
-    Includes 'catalog' field for the dashboard selectboxes.
+    Includes 'catalog' field for the interface's course selection.
     """
     # Load curriculum to build the catalog
     catalog = {}
     if CURRICULUM_PATH.exists():
-        with open(CURRICULUM_PATH, "r", encoding="utf-8") as f:
+        with open(CURRICULUM_PATH, encoding="utf-8") as f:
             curriculum = yaml.safe_load(f)
         catalog = {
             cls: list(data.get("subjects", []))
@@ -82,7 +82,7 @@ def generate_manifest(base_url: str = "https://storage.googleapis.com/akili-regi
     manifest = {
         "version":      datetime.now().strftime("%Y%m%d%H%M"),
         "generated_at": datetime.now().isoformat(),
-        "catalog":      catalog,   # ← Used by dashboard for class/subject selectboxes
+        "catalog":      catalog,   # ← Used by the interface for class/subject selection
         "files":        files_list,
     }
 

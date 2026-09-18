@@ -31,7 +31,7 @@ def export_prompts():
             prompt_key = filename.replace(".txt", "")
             filepath = os.path.join(prompts_dir, filename)
 
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 prompts_data[prompt_key] = f.read()
 
     if prompts_data:
