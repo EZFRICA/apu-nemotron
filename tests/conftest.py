@@ -170,13 +170,13 @@ def fake_nebius(monkeypatch):
 # Every tutoring turn goes through the NeMo Guardrails input rail. Tests run the real rail
 # with a scripted classifier model instead of Nemotron: a message containing
 # OFF_TOPIC_MARKER is classified off-topic, everything else school work.
-OFF_TOPIC_MARKER = "[hors-sujet]"
+OFF_TOPIC_MARKER = "[off-topic]"
 TEST_SESSION_ID = "session-test"
 TEST_CLASS_ID = "lycee-cocody:3eA"
 
 
 def scripted_verdict(prompt) -> str:
-    return "HORS_SUJET" if OFF_TOPIC_MARKER in str(prompt) else "SCOLAIRE"
+    return "OFF_TOPIC" if OFF_TOPIC_MARKER in str(prompt) else "SCHOOL"
 
 
 def make_classifier_llm(verdict_for=scripted_verdict, error: Exception | None = None):
@@ -234,6 +234,12 @@ def akili_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "METADATA_LINKS_PATH", str(meta_path))
     monkeypatch.setattr(config, "EMBEDDING_STAMP_PATH", str(tmp_path / "embedding_stamp.json"))
     monkeypatch.setattr(config, "ESCALATION_DB_PATH", str(tmp_path / "escalations.sqlite3"))
+    monkeypatch.setattr(config, "NOTEBOOK_DB_PATH", str(tmp_path / "notebook.sqlite3"))
+    # Everything else that lives under the data directory, so no test can touch data/.
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "cache"))
+    from apu.sync import sync_manager
+    monkeypatch.setattr(sync_manager, "LOCAL_MANIFEST_PATH", str(tmp_path / "local_manifest.json"))
     # The suite's hand-built vectors are DIM-wide, so the configured embedder for
     # a test is a DIM-wide one. Without this, every storage test would trip the
     # dimension check against the real 384-dim default.

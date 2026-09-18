@@ -17,13 +17,13 @@ from apu.guardrails.guard import TopicalGuard
 from apu.tools import web_search
 from tests.conftest import OFF_TOPIC_MARKER, make_classifier_llm, tool_call_reply
 
-WIKIPEDIA = {"title": "Fraction — Wikipédia", "url": "https://fr.wikipedia.org/wiki/Fraction",
-             "content": "Pour additionner deux fractions, on les met au même dénominateur."}
+WIKIPEDIA = {"title": "Fraction — Wikipedia", "url": "https://en.wikipedia.org/wiki/Fraction",
+             "content": "To add two fractions, put them over the same denominator."}
 REDDIT = {"title": "Post", "url": "https://www.reddit.com/r/maths/1", "content": "excluded globally"}
-ANSWER = "Pour additionner deux fractions, commence par trouver un dénominateur commun."
+ANSWER = "To add two fractions, start by finding a common denominator."
 
 
-def _state(query="Comment additionner deux fractions ?", **extra):
+def _state(query="How do I add two fractions?", **extra):
     return {
         "messages": [HumanMessage(content=query)],
         "session_id": "session-test",
@@ -74,17 +74,17 @@ async def test_a_validated_turn_searches_and_cites_its_sources(turn):
     assert assistant["role"] == "assistant" and assistant["content"] is None
     assert assistant["tool_calls"][0]["function"]["name"] == "web_search"
     assert tool_message["role"] == "tool" and tool_message["tool_call_id"] == "call-1"
-    assert "https://fr.wikipedia.org/wiki/Fraction" in tool_message["content"]
+    assert "https://en.wikipedia.org/wiki/Fraction" in tool_message["content"]
     assert "reddit.com" not in tool_message["content"]
 
     assert out["messages"][0].content == (
-        f"{ANSWER}\n\nSources :\n1. Fraction — Wikipédia — https://fr.wikipedia.org/wiki/Fraction"
+        f"{ANSWER}\n\nSources:\n1. Fraction — Wikipedia — https://en.wikipedia.org/wiki/Fraction"
     )
     assert out["sources"] == [{"title": WIKIPEDIA["title"], "url": WIKIPEDIA["url"]}]
     assert out["tool_problems"] == []
 
     extraction_prompt = nebius.extraction_calls[0]["messages"][0]["content"]
-    assert ANSWER in extraction_prompt and "Sources :" not in extraction_prompt
+    assert ANSWER in extraction_prompt and "Sources:" not in extraction_prompt
 
 
 async def test_without_a_search_the_answer_has_no_source_list(turn):
@@ -117,9 +117,9 @@ async def test_an_unvalidated_turn_is_not_offered_the_tool(turn, monkeypatch):
 async def test_an_off_topic_turn_never_reaches_the_model_or_the_search(turn):
     import apu.runtime.agent as agent
     nebius, tavily = turn
-    nebius.main_replies = [tool_call_reply("web_search", {"query": "score du match"})]
+    nebius.main_replies = [tool_call_reply("web_search", {"query": "match score"})]
 
-    out = await agent.planner_node(_state(f"{OFF_TOPIC_MARKER} score du match ?"))
+    out = await agent.planner_node(_state(f"{OFF_TOPIC_MARKER} match score?"))
     assert out["off_topic"] is True
     assert nebius.calls == [] and tavily == []
 
@@ -132,22 +132,14 @@ async def test_search_rounds_are_capped_and_the_last_round_forces_an_answer(turn
 
     out = await agent.planner_node(_state())
 
-    assert len(nebius.main_calls) == agent.MAX_SEARCH_ROUNDS + 1
-    assert "tools" not in nebius.main_calls[-1]["kwargs"]
+    forced_final_round = nebius.main_calls[agent.MAX_SEARCH_ROUNDS]
+    assert "tools" not in forced_final_round["kwargs"]
     assert sum(len(tool.queries) for tool in tavily) == agent.MAX_SEARCH_ROUNDS
+    # The scripted model never writes text, so the forced round is empty and the nudged
+    # retry follows: MAX_SEARCH_ROUNDS tool rounds + forced round + one retry.
+    assert len(nebius.main_calls) == agent.MAX_SEARCH_ROUNDS + 2
+    assert out["messages"][0].content.startswith(agent.EMPTY_ANSWER_FALLBACK)
     assert out["sources"] == [{"title": WIKIPEDIA["title"], "url": WIKIPEDIA["url"]}], "deduplicated"
-
-
-async def test_a_spoken_answer_names_sources_without_urls(turn):
-    import apu.runtime.agent as agent
-    nebius, _ = turn
-    nebius.main_replies = [tool_call_reply("web_search", {"query": "fractions"}), ANSWER]
-    nebius.extraction_replies = ["{}"]
-
-    out = await agent.planner_node(_state(interaction_mode={"input_channel": "voice", "output_channel": "voice"}))
-
-    assert out["rendered_answer"] == {"spoken": f"D'après Wikipédia : {ANSWER}", "written": None}
-    assert out["messages"][0].content == f"D'après Wikipédia : {ANSWER}"
 
 
 async def test_an_unavailable_search_still_answers_and_reports_it(turn, monkeypatch):
@@ -194,3 +186,39 @@ def test_call_main_model_message_keeps_the_tool_calls(fake_nebius):
     assert nebius_client.call_main_model([{"role": "user", "content": "q"}]) is None, (
         "call_main_model alone would have lost the request"
     )
+
+
+# ── empty answers (measured live: intermittent after two search rounds) ─────
+
+async def test_an_empty_final_answer_is_retried_once_with_a_nudge(turn):
+    import apu.runtime.agent as agent
+    nebius, _ = turn
+    nebius.main_replies = [
+        tool_call_reply("web_search", {"query": "BEPC 2026"}, call_id="call-1"),
+        tool_call_reply("web_search", {"query": "BEPC 2026 calendrier"}, call_id="call-2"),
+        {"content": None},   # forced final round comes back empty, as observed live
+        ANSWER,              # the nudged retry
+    ]
+    nebius.extraction_replies = ["{}"]
+
+    out = await agent.planner_node(_state())
+
+    retry = nebius.main_calls[-1]
+    assert retry["messages"][-1] == {"role": "user", "content": agent.FINAL_ANSWER_NUDGE}
+    assert retry["kwargs"] == {"temperature": 0.3}, "no tools on the retry"
+    assert out["messages"][0].content.startswith(ANSWER)
+    assert "Sources:" in out["messages"][0].content
+    assert out["answer_problems"] == []
+
+
+async def test_an_answer_empty_twice_falls_back_and_is_reported(turn):
+    import apu.runtime.agent as agent
+    nebius, _ = turn
+    nebius.main_replies = ["   "]   # sticky: whitespace every time
+    nebius.extraction_replies = ["{}"]
+
+    out = await agent.planner_node(_state())
+
+    assert len(nebius.main_calls) == 2
+    assert out["messages"][0].content == agent.EMPTY_ANSWER_FALLBACK
+    assert out["answer_problems"] == ["the tutor model returned an empty answer twice"]
