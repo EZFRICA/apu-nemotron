@@ -1,30 +1,22 @@
-"""Rendering web-search sources with an answer, according to the output modality.
+"""Rendering web-search sources with an answer.
 
-A search is never invisible: every answer built from web results carries its sources.
-How they are carried depends on the channel:
-
-  - text or braille: a numbered list (title and URL) at the end of the answer. For braille
-    the whole written text, list included, is then translated by the braille translator.
-  - voice: the source names are said aloud ("D'après Wikipédia...") and URLs are never
-    read out, since a spoken URL is noise. If the session also has a text display, the
-    written list is provided alongside the spoken answer.
+A search is never invisible: every answer built from web results carries its sources as a
+numbered list (title and URL) at the end of the answer.
 """
 
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from apu.modality.mode import InteractionMode
-
-# Display names for sites whose domain does not read well aloud. Anything else falls back
-# to its capitalised second-level domain ("lumni.fr" -> "Lumni").
+# Display names for sites whose domain does not read well. Anything else falls back to its
+# capitalised second-level domain ("lumni.fr" -> "Lumni").
 _KNOWN_SITE_NAMES = {
-    "wikipedia.org": "Wikipédia",
+    "wikipedia.org": "Wikipedia",
     "wikimedia.org": "Wikimedia",
     "britannica.com": "Britannica",
     "larousse.fr": "Larousse",
     "khanacademy.org": "Khan Academy",
     "lumni.fr": "Lumni",
-    "education.gouv.fr": "le ministère de l'Éducation nationale",
+    "education.gouv.fr": "the French Ministry of Education",
 }
 
 
@@ -46,46 +38,15 @@ class Source:
         return self.title or host or self.url
 
 
-@dataclass(frozen=True)
-class RenderedAnswer:
-    """What each channel receives. None means the channel gets nothing."""
-
-    spoken: str | None
-    written: str | None
-
-
 def written_source_list(sources: list[Source]) -> str:
-    lines = ["Sources :"]
+    lines = ["Sources:"]
     for number, source in enumerate(sources, start=1):
         lines.append(f"{number}. {source.title} — {source.url}")
     return "\n".join(lines)
 
 
-def spoken_attribution(sources: list[Source]) -> str:
-    # Each site named once, in the order results came back: three Wikipedia pages are
-    # still "d'après Wikipédia".
-    names: list[str] = []
-    for source in sources:
-        if source.site_name not in names:
-            names.append(source.site_name)
-    if len(names) == 1:
-        joined = names[0]
-    else:
-        joined = ", ".join(names[:-1]) + " et " + names[-1]
-    return f"D'après {joined}"
-
-
-def render_answer(answer: str, sources: list[Source], mode: InteractionMode) -> RenderedAnswer:
-    if mode.is_spoken:
-        if not sources:
-            return RenderedAnswer(
-                spoken=answer, written=answer if mode.text_display_available else None
-            )
-        written = (
-            f"{answer}\n\n{written_source_list(sources)}" if mode.text_display_available else None
-        )
-        return RenderedAnswer(spoken=f"{spoken_attribution(sources)} : {answer}", written=written)
-
+def render_answer(answer: str, sources: list[Source]) -> str:
+    """The answer as the student reads it: the text, then its sources when there are any."""
     if not sources:
-        return RenderedAnswer(spoken=None, written=answer)
-    return RenderedAnswer(spoken=None, written=f"{answer}\n\n{written_source_list(sources)}")
+        return answer
+    return f"{answer}\n\n{written_source_list(sources)}"
