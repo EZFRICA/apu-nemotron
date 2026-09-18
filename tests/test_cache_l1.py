@@ -8,7 +8,6 @@ import pytest
 
 from apu.mmu import cache_l1
 
-
 # ── TTL ──────────────────────────────────────────────────────────────────────
 
 def test_ttl_by_type_values():

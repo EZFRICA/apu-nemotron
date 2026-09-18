@@ -5,11 +5,10 @@ Target: apu/storage/lance_driver.py (ported from Akili)
 Verified against the installed lancedb 0.30.2 — nothing here is assumed from docs.
 """
 
-import lancedb
 import pytest
 
 from apu.storage import lance_driver
-from tests.conftest import V_A, V_B, V_A_SCALED, V_A_OPPOSITE, DIM
+from tests.conftest import DIM, V_A, V_A_OPPOSITE, V_A_SCALED, V_B
 
 
 def _row(rid, vector, content="c", block_type="cours", cls="6eme", subject="math"):
@@ -106,7 +105,7 @@ def test_lancedb_default_metric_is_squared_l2_not_cosine(akili_paths):
         _row("scaled", V_A_SCALED),
     ])
     df = t.search(list(V_A), vector_column_name="vector").limit(10).to_pandas()
-    dist = dict(zip(df["id"], df["_distance"]))
+    dist = dict(zip(df["id"], df["_distance"], strict=True))
 
     assert dist["same"] == pytest.approx(0.0)
     assert dist["orth"] == pytest.approx(2.0)       # cosine would be 1.0
@@ -164,7 +163,7 @@ async def test_search_block_index_applies_the_class_subject_filter(akili_paths):
     db = lance_driver.get_db()
     db.create_table("edu_registry", data=[
         _row("ch_match", V_A, cls="6eme", subject="math"),
-        _row("ch_other", V_A, cls="5eme", subject="histoire"),
+        _row("ch_other", V_A, cls="5eme", subject="history"),
     ])
 
     results = await lance_driver.search_block_index(
@@ -389,14 +388,16 @@ async def test_normalisation_keeps_the_orthogonal_and_opposite_ends_of_the_scale
 
 async def test_filter_predicate_is_built_by_string_interpolation(akili_paths):
     """
-    lance_driver.py:59 and :92 build SQL predicates with f-strings. A value
-    containing a single quote produces a malformed predicate. class_level and
-    subject originate from Streamlit selectbox state (dashboard.py:182/187),
-    which is bounded by the remote catalog -- but block_id at :92 is not.
+    lance_driver.py builds SQL predicates with f-strings, since LanceDB exposes no
+    parameter binding. A value containing a single quote produces a malformed predicate.
+    class_level and subject come from the interface's course selection, bounded by the
+    catalog -- but block_id is not, so id predicates escape their literal.
     """
     db = lance_driver.get_db()
     db.create_table("user_memory", data=[_row("normal", V_A)])
     table = db.open_table("user_memory")
 
-    with pytest.raises(Exception):
+    # lancedb surfaces the tokenizer failure as RuntimeError; the point is that an
+    # unescaped quote terminates the literal and the predicate is rejected, not accepted.
+    with pytest.raises(RuntimeError, match="Unterminated string literal"):
         table.search().where("id = 'O'Brien'").limit(1).to_pandas()

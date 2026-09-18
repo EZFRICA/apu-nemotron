@@ -9,8 +9,8 @@ a download attempt hangs at the first question instead of failing. So the model
 has to be in the cache directory before the app is used, and the cache directory
 ships with the deployment.
 
-    python scripts/fetch_embedding_model.py
-    python scripts/fetch_embedding_model.py --cache-dir /media/usb/models
+    uv run python scripts/fetch_embedding_model.py
+    uv run python scripts/fetch_embedding_model.py --cache-dir /media/usb/models
 
 Then copy the cache directory onto each target device (or image it in).
 Roughly 240MB for the default model.
@@ -41,7 +41,7 @@ def main() -> int:
     try:
         from fastembed import TextEmbedding
     except ImportError:
-        print("fastembed is not installed. Run `pip install -r requirements.txt` first.",
+        print("fastembed is not installed. Run `uv sync` first.",
               file=sys.stderr)
         return 1
 
@@ -62,7 +62,7 @@ def main() -> int:
 
     t0 = time.time()
     model = TextEmbedding(model_name=args.model, cache_dir=args.cache_dir)
-    vector = next(iter(model.embed(["vérification du modèle"])))
+    vector = next(iter(model.embed(["model check"])))
     elapsed = time.time() - t0
 
     dim = len(vector)

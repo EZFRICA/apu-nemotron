@@ -17,12 +17,11 @@ student.
 
 import json
 import re
-from typing import Dict, List, Tuple
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.S)
 
 
-def _candidates(raw: str) -> List[str]:
+def _candidates(raw: str) -> list[str]:
     """Progressively more forgiving readings of the payload, best first."""
     out = [raw]
 
@@ -66,7 +65,7 @@ def _candidates(raw: str) -> List[str]:
     return out
 
 
-def parse_extraction(raw) -> Tuple[Dict[str, str], List[str]]:
+def parse_extraction(raw) -> tuple[dict[str, str], list[str]]:
     """
     Return (updates, problems).
 
@@ -76,7 +75,7 @@ def parse_extraction(raw) -> Tuple[Dict[str, str], List[str]]:
 
     Never raises. A parse failure yields ({}, [reason]).
     """
-    problems: List[str] = []
+    problems: list[str] = []
 
     if isinstance(raw, list):
         # Some providers return a list of content blocks; thinking blocks carry
@@ -103,7 +102,7 @@ def parse_extraction(raw) -> Tuple[Dict[str, str], List[str]]:
     if parsed is None:
         return {}, [f"no JSON object found in extractor output: {raw[:120]!r}"]
 
-    updates: Dict[str, str] = {}
+    updates: dict[str, str] = {}
     for key, value in parsed.items():
         # Per key, so one bad value cannot discard the good ones. The whole loop
         # used to sit inside the caller's try, making extraction all-or-nothing.

@@ -15,19 +15,18 @@ from apu.embeddings import local_embedder
 
 
 def _cosine(a, b):
-    return sum(x * y for x, y in zip(a, b))
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 async def test_a_paraphrase_ranks_above_an_unrelated_sentence(real_local_embedder):
     """
     Catches a broken tokenizer or the wrong pooling config, which does not raise:
     it just produces mediocre results that look like the model being weak.
-    French, because that is the deployment target.
     """
     vectors = await real_local_embedder.aembed_documents([
-        "Comment additionner deux fractions ?",
-        "De quelle manière fait-on la somme de deux fractions ?",
-        "Le chat dort sur le tapis devant la cheminée.",
+        "How do you add two fractions?",
+        "What is the way to compute the sum of two fractions?",
+        "The cat is sleeping on the rug by the fireplace.",
     ])
     q, para, other = (local_embedder.normalize_vector(v) for v in vectors)
 
@@ -53,19 +52,19 @@ async def test_cross_lingual_pairs_are_closer_than_unrelated(real_local_embedder
 
 
 async def test_the_embedder_produces_the_configured_dimension(real_local_embedder):
-    vector = await real_local_embedder.aembed_query("vérification")
+    vector = await real_local_embedder.aembed_query("check")
     assert len(vector) == config.LOCAL_EMBEDDING_DIM
 
 
 async def test_embedding_is_deterministic(real_local_embedder):
-    a = await real_local_embedder.aembed_query("les nombres relatifs")
-    b = await real_local_embedder.aembed_query("les nombres relatifs")
+    a = await real_local_embedder.aembed_query("negative numbers")
+    b = await real_local_embedder.aembed_query("negative numbers")
     assert a == pytest.approx(b)
 
 
 def test_the_scaffold_embed_entry_point_uses_the_cached_embedder(real_local_embedder):
     """embed() is kept from the scaffold as the synchronous batch entry point."""
-    vectors = local_embedder.embed(["un", "deux"])
+    vectors = local_embedder.embed(["one", "two"])
     assert len(vectors) == 2
     assert all(len(v) == config.LOCAL_EMBEDDING_DIM for v in vectors)
 

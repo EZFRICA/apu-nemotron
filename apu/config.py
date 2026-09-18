@@ -63,6 +63,22 @@ METADATA_LINKS_PATH = os.path.join(DATA_DIR, "memory", "metadata_links.json")
 # Sidecar recording which embedder wrote each L3 table, so a model swap is caught.
 EMBEDDING_STAMP_PATH = os.path.join(DATA_DIR, "embedding_stamp.json")
 
+# ── Cloud course registry (device side, apu/sync/sync_manager.py) ────────────
+# Manifest of the registry this device downloads courses from. The GCS bucket is
+# derived from this URL (its 4th "/" segment), so pointing a device at another
+# registry is this one setting. The default is Akili's bucket; Akili hardcoded it.
+REGISTRY_MANIFEST_URL = os.environ.get(
+    "REGISTRY_MANIFEST_URL", "https://storage.googleapis.com/akili-registry/manifest.json"
+)
+
+# A downloaded parquet lands here, is imported into L3, then deleted.
+CACHE_DIR = os.path.join(DATA_DIR, "cache")
+
+# Service-account JSON with read access to the registry bucket. Unset: Application
+# Default Credentials (`gcloud auth application-default login`). Akili's client reads
+# the registry through an authenticated client, so one of the two is required.
+GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+
 # ── MMU tunables ─────────────────────────────────────────────────────────────
 # NOT WIRED. The scaffold documents a hard cap of 12 active blocks. That figure comes
 # from the travel-agent APU (4 fixed + 8 dynamic; its controller says "the absolute
@@ -80,7 +96,7 @@ MAX_DYNAMIC_BLOCKS = int(os.environ.get("APU_MAX_DYNAMIC_BLOCKS", "5"))
 #
 # THESE ARE CALIBRATED TO THE EMBEDDING MODEL and must be re-measured if it changes.
 # Measured in Akili with paraphrase-multilingual-MiniLM-L12-v2 on real course content,
-# query "Explique-moi les fractions":
+# a French query meaning "explain fractions to me":
 #
 #   chapter_1_simple_fractions      0.670   <- the right chapter
 #   chapter_2_decimal_numbers       0.507   <- same subject, related
@@ -100,3 +116,72 @@ MIN_RELEVANCE_CERTAINTY = 0.45
 # ── Education defaults (Akili) ───────────────────────────────────────────────
 EDU_DEFAULT_CLASS = "6eme"
 EDU_DEFAULT_SUBJECT = "math"
+
+# ── Web search (Tavily) ──────────────────────────────────────────────────────
+# Excluded for every class, always. A class policy can only ADD domains to this list
+# (ClassPolicy.tavily_excluded_domains), never remove one. There is deliberately no
+# allowlist of "trusted" sites beyond it: the search stays broad on purpose.
+GLOBAL_EXCLUDED_DOMAINS: tuple[str, ...] = (
+    "twitter.com",
+    "x.com",
+    "instagram.com",
+    "tiktok.com",
+    "facebook.com",
+    "reddit.com",
+)
+TAVILY_MAX_RESULTS = int(os.environ.get("TAVILY_MAX_RESULTS", "5"))
+
+# Longest prompt the cloud registry may install per key (persona, per-class guidelines).
+# The registry supplies instructions, not just content, so a value long enough to crowd out
+# the course context or the student's question is refused and the built-in persona is used.
+REGISTRY_PROMPT_MAX_CHARS = int(os.environ.get("APU_REGISTRY_PROMPT_MAX_CHARS", "8000"))
+
+# ── Guardrails (NeMo Guardrails) ─────────────────────────────────────────────
+# One shared config for every class. What varies per class is data (ClassPolicy),
+# not Colang, so adding a class never means compiling a new rails config.
+GUARDRAILS_CONFIG_DIR = os.path.join(_REPO_ROOT, "apu", "guardrails", "config")
+
+# ── Registries, loaded once at startup ───────────────────────────────────────
+# Per-class policy (escalation threshold, extra excluded domains) and who teaches or
+# administers which class. The shipped files are demo data for a fictional school.
+CLASS_POLICIES_PATH = os.environ.get(
+    "APU_CLASS_POLICIES_PATH", os.path.join(_REPO_ROOT, "registries", "class_policies.json")
+)
+TEACHER_ASSIGNMENTS_PATH = os.environ.get(
+    "APU_TEACHER_ASSIGNMENTS_PATH",
+    os.path.join(_REPO_ROOT, "registries", "teacher_assignments.json"),
+)
+
+# ── Escalation events ────────────────────────────────────────────────────────
+# Kept out of the tutoring memory entirely (see apu/mmu/escalation_store.py).
+ESCALATION_DB_PATH = os.path.join(DATA_DIR, "escalations.sqlite3")
+# A class's clusters are recomputed once this many new events have arrived in that
+# class since its last snapshot. Small enough that a teacher sees a pattern the same
+# day, large enough that clustering does not run on every single event.
+ESCALATION_CLUSTER_TRIGGER_COUNT = int(os.environ.get("APU_ESCALATION_CLUSTER_TRIGGER_COUNT", "5"))
+
+# ── Student notebook ─────────────────────────────────────────────────────────
+# What the student chose to keep during a conversation, and the source of their revision
+# sheets. Written only on the student's request; never read by the tutor
+# (see apu/notebook/__init__.py).
+NOTEBOOK_DB_PATH = os.path.join(DATA_DIR, "notebook.sqlite3")
+# Longest text one entry may hold, so a runaway save cannot fill a revision sheet.
+NOTEBOOK_MAX_ENTRY_CHARS = 4000
+# Entries one student may keep. Saving is a model call and a row on disk, both driven by the
+# student, so there is a ceiling rather than an open-ended queue.
+NOTEBOOK_MAX_ENTRIES_PER_STUDENT = int(os.environ.get("APU_NOTEBOOK_MAX_ENTRIES", "200"))
+# What one revision sheet may send to the model: enough for a chapter, not a whole notebook.
+NOTEBOOK_MAX_SHEET_ENTRIES = int(os.environ.get("APU_NOTEBOOK_MAX_SHEET_ENTRIES", "25"))
+NOTEBOOK_MAX_SHEET_CHARS = int(os.environ.get("APU_NOTEBOOK_MAX_SHEET_CHARS", "20000"))
+
+# ── Demo identity: STUB, not authentication ──────────────────────────────────
+# The interface has no login. This is the identity it opens with; the sidebar selector
+# switches between the demo students, teachers and admins with no password at all.
+DEMO_STUDENT_ID = os.environ.get("APU_STUDENT_ID", "eleve-aya")
+DEMO_CLASS_ID = os.environ.get("APU_CLASS_ID", "lycee-cocody:3eA")
+
+# Demo students offered by the interface's identity selector (stub). Students are not in
+# any registry of the real system; this list exists only so a live demo can switch pupils.
+DEMO_STUDENTS_PATH = os.environ.get(
+    "APU_DEMO_STUDENTS_PATH", os.path.join(_REPO_ROOT, "registries", "demo_students.json")
+)

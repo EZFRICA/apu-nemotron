@@ -19,6 +19,7 @@ from tests.conftest import V_A
 def _state(query="I don't understand fractions"):
     return {
         "messages": [HumanMessage(content=query)],
+        "session_id": "session-test",  # opened by the autouse topical_guard fixture
         "agent_id": "agent-test",
         "class_level": "6eme",
         "subject": "math",

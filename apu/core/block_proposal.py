@@ -9,7 +9,7 @@ The detector emitted `block_type` while the executor read `type`, and neither
 declared shape is what stops the two sides drifting again.
 """
 
-from typing import List, Optional, TypedDict
+from typing import TypedDict
 
 
 class BlockProposal(TypedDict):
@@ -18,14 +18,14 @@ class BlockProposal(TypedDict):
     label: str
     type: str            # a DLL block type: temp | cours | fondamental
     initial_content: str
-    keywords: List[str]
+    keywords: list[str]
     reason: str
 
 
 REQUIRED_FIELDS = ("proposed_id", "label", "type", "initial_content")
 
 
-def validate(proposal: Optional[dict]) -> Optional[str]:
+def validate(proposal: dict | None) -> str | None:
     """
     Return None if the proposal can be executed, else why it cannot.
 

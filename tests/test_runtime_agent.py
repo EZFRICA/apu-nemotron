@@ -22,9 +22,10 @@ from apu.mmu import dll as mmu
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _state(query="Combien font 3/4 + 2/5 ?"):
+def _state(query="What is 3/4 + 2/5?"):
     return {
         "messages": [HumanMessage(content=query)],
+        "session_id": "session-test",  # opened by the autouse topical_guard fixture
         "agent_id": "agent-test", "class_level": "6eme", "subject": "math",
         "memory_only_mode": False, "needs_new_block": "False",
         "proposed_block_config": {},
@@ -61,18 +62,20 @@ def test_importing_the_agent_without_a_nebius_key_succeeds():
     assert "IMPORT_OK" in proc.stdout, proc.stdout + proc.stderr
 
 
-def test_the_nebius_client_itself_still_fails_loudly_without_a_key():
-    """Pins why the lazy import above is needed."""
+def test_the_nebius_client_fails_loudly_on_first_use_without_a_key():
+    """Importing it is free; the missing key is reported when a call is actually made."""
     proc = _run(
         """
+        import apu.inference.nebius_client as client
+        print("IMPORT_OK")
         try:
-            import apu.inference.nebius_client
-            print("IMPORT_OK")
+            client.call_main_model([{"role": "user", "content": "hi"}])
         except RuntimeError as e:
             print("RAISED:", e)
         """,
         {"NEBIUS_API_KEY": ""},
     )
+    assert "IMPORT_OK" in proc.stdout, proc.stdout + proc.stderr
     assert "RAISED: NEBIUS_API_KEY is not set" in proc.stdout, proc.stdout + proc.stderr
 
 
@@ -98,15 +101,19 @@ async def test_a_turn_sends_the_answer_to_super_and_the_extraction_to_nano(
 ):
     import apu.runtime.agent as agent
 
-    fake_nebius.main_replies = ["Cela fait 23."]
-    fake_nebius.extraction_replies = ['{"current_session": "Fractions en 6eme."}']
+    fake_nebius.main_replies = ["That makes 23/20."]
+    fake_nebius.extraction_replies = ['{"current_session": "Fractions in 6eme."}']
 
     await agent.planner_node(_state())
 
     assert [c["model"] for c in fake_nebius.calls] == [
         config.MAIN_MODEL, config.EXTRACTION_MODEL,
     ], "answer first, then the write-back, each on its own model"
-    assert fake_nebius.main_calls[0]["kwargs"] == {"temperature": 0.7}
+    kwargs = fake_nebius.main_calls[0]["kwargs"]
+    assert kwargs["temperature"] == 0.7
+    assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["web_search", "save_to_notebook"], (
+        "the guard validated this turn, so web search and notebook saving are offered"
+    )
 
 
 async def test_the_write_back_is_still_inline(
@@ -120,13 +127,13 @@ async def test_the_write_back_is_still_inline(
     import apu.runtime.agent as agent
 
     fake_nebius.main_replies = ["ok"]
-    fake_nebius.extraction_replies = ['{"current_session": "Fractions en 6eme."}']
+    fake_nebius.extraction_replies = ['{"current_session": "Fractions in 6eme."}']
 
     await agent.planner_node(_state())
 
     assert len(fake_nebius.extraction_calls) == 1
     dll = await mmu.load_dll()
-    assert dll["nodes"]["current_session"]["content"] == "Fractions en 6eme."
+    assert dll["nodes"]["current_session"]["content"] == "Fractions in 6eme."
 
 
 async def test_an_empty_answer_is_not_the_string_none(
@@ -138,7 +145,9 @@ async def test_an_empty_answer_is_not_the_string_none(
     fake_nebius.extraction_replies = ["{}"]
 
     out = await agent.planner_node(_state())
-    assert out["messages"][0].content == ""
+    assert out["messages"][0].content == agent.EMPTY_ANSWER_FALLBACK
+    assert "None" not in out["messages"][0].content
+    assert out["answer_problems"] == ["the tutor model returned an empty answer twice"]
 
 
 # ── the graph ────────────────────────────────────────────────────────────────
@@ -158,12 +167,65 @@ async def test_a_turn_runs_end_to_end_through_the_graph(
 ):
     from apu.runtime import agent
 
-    fake_nebius.main_replies = ["Cela fait 23."]
-    fake_nebius.extraction_replies = ['{"current_session": "Fractions en 6eme."}']
+    fake_nebius.main_replies = ["That makes 23/20."]
+    fake_nebius.extraction_replies = ['{"current_session": "Fractions in 6eme."}']
 
     await mmu.init_dll()
     result = await agent.create_agent_graph().ainvoke(_state())
 
-    assert result["messages"][-1].content == "Cela fait 23."
+    assert result["messages"][-1].content == "That makes 23/20."
     assert result["memory_problems"] == []
-    assert "Combien font 3/4 + 2/5 ?" in fake_nebius.extraction_calls[0]["messages"][0]["content"]
+    assert "What is 3/4 + 2/5?" in fake_nebius.extraction_calls[0]["messages"][0]["content"]
+
+
+# ── the topical guard in front of every turn ─────────────────────────────────
+
+async def test_an_off_topic_turn_gets_the_guard_reply_and_nothing_else(
+    akili_paths, no_network, stub_embeddings, fake_nebius
+):
+    """No answer model, no extraction, no memory write for an off-topic turn."""
+    import apu.runtime.agent as agent
+    from apu.guardrails.actions import GENTLE_REPLY
+    from tests.conftest import OFF_TOPIC_MARKER
+
+    await mmu.init_dll()
+    before = await mmu.load_dll()
+
+    out = await agent.planner_node(_state(f"{OFF_TOPIC_MARKER} Who won the match yesterday?"))
+
+    assert out["off_topic"] is True
+    assert out["messages"][0].content == GENTLE_REPLY
+    assert fake_nebius.calls == [], "no Nemotron call for an off-topic turn"
+    assert stub_embeddings == [], "not even the query was embedded"
+    assert (await mmu.load_dll())["nodes"] == before["nodes"]
+
+
+async def test_a_turn_without_a_guard_session_is_refused(akili_paths, no_network, fake_nebius):
+    import pytest as _pytest
+
+    import apu.runtime.agent as agent
+
+    state = _state()
+    del state["session_id"]
+    with _pytest.raises(agent.GuardSessionRequired):
+        await agent.planner_node(state)
+    assert fake_nebius.calls == []
+
+
+async def test_a_failing_guard_means_no_answer(
+    akili_paths, no_network, stub_embeddings, fake_nebius, monkeypatch
+):
+    """Fail closed: a turn the guard could not classify is not answered unguarded."""
+    import pytest as _pytest
+
+    import apu.runtime.agent as agent
+    from apu.guardrails import guard
+    from apu.guardrails.guard import GuardUnavailable, TopicalGuard
+    from tests.conftest import make_classifier_llm
+
+    monkeypatch.setattr(guard, "_guard", TopicalGuard(llm=make_classifier_llm(error=ConnectionError("401"))))
+    fake_nebius.main_replies = ["should never be used"]
+
+    with _pytest.raises(GuardUnavailable):
+        await agent.planner_node(_state())
+    assert fake_nebius.calls == []

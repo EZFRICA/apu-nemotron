@@ -1,0 +1,29 @@
+# Topical rail, shared by every class (Colang 1.0).
+#
+# One classifier: strictly school use versus off-topic. There is no list of allowed
+# subjects. What differs per class (escalation threshold) is session data read by the
+# custom actions, not something compiled here.
+#
+# check_school_topic returns one of: "on_topic", "off_topic", "uncertain", "error".
+#   off_topic  -> handle_off_topic_attempt counts the attempt, picks a kind or a firmer
+#                 reply depending on the class threshold, and queues an EscalationEvent
+#                 when the threshold is crossed. The turn stops here: no answer, no search.
+#   on_topic   -> mark_turn_validated issues the ValidatedTurn that web search requires
+#                 (execution gate: a search never runs for a turn that was not validated).
+#   uncertain  -> the turn is answered but not validated, and not counted.
+#   error      -> nothing validated; the Python guard turns this into GuardUnavailable,
+#                 so no answer is produced without a working guard.
+
+define bot inform off topic
+  "$off_topic_reply"
+
+define flow school topic check
+  $verdict = execute check_school_topic
+
+  if $verdict == "off_topic"
+    $off_topic_reply = execute handle_off_topic_attempt
+    bot inform off topic
+    stop
+
+  if $verdict == "on_topic"
+    execute mark_turn_validated

@@ -11,6 +11,8 @@ Invariants this suite maintains:
     real ONNX embedder through `real_local_embedder`.
 """
 
+import copy
+import json
 import os
 import socket
 from types import SimpleNamespace
@@ -81,6 +83,25 @@ def no_network(monkeypatch):
 
 
 # ── fake Nebius Token Factory client ─────────────────────────────────────────
+class FakeToolCall:
+    """Shaped like the OpenAI SDK's tool call, as the smoke test showed Token Factory returns it."""
+
+    def __init__(self, id: str, name: str, arguments: str):
+        self.id = id
+        self.type = "function"
+        self.function = SimpleNamespace(name=name, arguments=arguments)
+
+    def model_dump(self) -> dict:
+        return {"id": self.id, "type": self.type,
+                "function": {"name": self.function.name, "arguments": self.function.arguments}}
+
+
+def tool_call_reply(name: str, arguments: dict, call_id: str = "call-1") -> dict:
+    """A main-model reply that asks for one tool, with content None as Nemotron returns it."""
+    return {"content": None,
+            "tool_calls": [{"id": call_id, "name": name, "arguments": json.dumps(arguments)}]}
+
+
 class FakeNebiusClient:
     """
     Stands in for the OpenAI client inside apu.inference.nebius_client.
@@ -110,12 +131,22 @@ class FakeNebiusClient:
         else:
             raise AssertionError(f"unexpected model id sent to Nebius: {model!r}")
 
+        # A copy: the agent keeps appending tool round trips to the same list after the
+        # call, which would otherwise rewrite what this call appears to have received.
+        self.calls[-1]["messages"] = copy.deepcopy(messages)
+
         reply = (queue.pop(0) if len(queue) > 1 else queue[0]) if queue else ""
         if isinstance(reply, Exception):
             raise reply
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=reply))]
-        )
+        if isinstance(reply, dict):
+            message = SimpleNamespace(
+                content=reply.get("content"),
+                tool_calls=[FakeToolCall(**call) for call in reply.get("tool_calls", [])] or None,
+                model_extra={},
+            )
+        else:
+            message = SimpleNamespace(content=reply, tool_calls=None, model_extra={})
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
     @property
     def main_calls(self):
@@ -135,6 +166,58 @@ def fake_nebius(monkeypatch):
     return fake
 
 
+# ── topical guard ────────────────────────────────────────────────────────────
+# Every tutoring turn goes through the NeMo Guardrails input rail. Tests run the real rail
+# with a scripted classifier model instead of Nemotron: a message containing
+# OFF_TOPIC_MARKER is classified off-topic, everything else school work.
+OFF_TOPIC_MARKER = "[off-topic]"
+TEST_SESSION_ID = "session-test"
+TEST_CLASS_ID = "lycee-cocody:3eA"
+
+
+def scripted_verdict(prompt) -> str:
+    return "OFF_TOPIC" if OFF_TOPIC_MARKER in str(prompt) else "SCHOOL"
+
+
+def make_classifier_llm(verdict_for=scripted_verdict, error: Exception | None = None):
+    from nemoguardrails.testing.fake_model import FakeLLMModel
+    from nemoguardrails.types import LLMResponse
+
+    class ClassifierLLM(FakeLLMModel):
+        """Answers every classifier call from the prompt, instead of a fixed list."""
+
+        def __init__(self):
+            super().__init__(responses=[])
+            self.calls: list[tuple[object, dict]] = []
+
+        async def generate_async(self, prompt, *, stop=None, **kwargs):
+            self.calls.append((prompt, kwargs))
+            self.inference_count += 1
+            if error is not None:
+                raise error
+            return LLMResponse(content=verdict_for(prompt))
+
+    return ClassifierLLM()
+
+
+@pytest.fixture(scope="session")
+def _scripted_topical_guard():
+    from apu.guardrails.guard import TopicalGuard
+    return TopicalGuard(llm=make_classifier_llm())
+
+
+@pytest.fixture(autouse=True)
+def topical_guard(_scripted_topical_guard, monkeypatch):
+    """Install the scripted guard and open the default test session for every test."""
+    from apu.guardrails import guard
+    from apu.guardrails.session import sessions
+
+    monkeypatch.setattr(guard, "_guard", _scripted_topical_guard)
+    sessions.open_session(student_id="eleve-test", class_id=TEST_CLASS_ID, session_id=TEST_SESSION_ID)
+    yield _scripted_topical_guard
+    sessions.close(TEST_SESSION_ID)
+
+
 # ── isolated storage ─────────────────────────────────────────────────────────
 @pytest.fixture
 def akili_paths(tmp_path, monkeypatch):
@@ -150,6 +233,13 @@ def akili_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LANCE_DB_PATH", str(db_path))
     monkeypatch.setattr(config, "METADATA_LINKS_PATH", str(meta_path))
     monkeypatch.setattr(config, "EMBEDDING_STAMP_PATH", str(tmp_path / "embedding_stamp.json"))
+    monkeypatch.setattr(config, "ESCALATION_DB_PATH", str(tmp_path / "escalations.sqlite3"))
+    monkeypatch.setattr(config, "NOTEBOOK_DB_PATH", str(tmp_path / "notebook.sqlite3"))
+    # Everything else that lives under the data directory, so no test can touch data/.
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "CACHE_DIR", str(tmp_path / "cache"))
+    from apu.sync import sync_manager
+    monkeypatch.setattr(sync_manager, "LOCAL_MANIFEST_PATH", str(tmp_path / "local_manifest.json"))
     # The suite's hand-built vectors are DIM-wide, so the configured embedder for
     # a test is a DIM-wide one. Without this, every storage test would trip the
     # dimension check against the real 384-dim default.

@@ -9,12 +9,16 @@ import json
 import os
 import threading
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import lancedb
 
 from apu import config
 from apu.embeddings import local_embedder
+from apu.logger import get_logger
+from apu.mmu.block_types import TUTORING_EXCLUDED_BLOCK_TYPES, refuse_non_tutoring_block_type
+
+logger = get_logger(__name__)
 
 _db = None
 _db_lock = threading.Lock()
@@ -101,7 +105,7 @@ def _read_stamp_doc() -> Dict:
     if not os.path.exists(path):
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             doc = json.load(f)
     except (json.JSONDecodeError, OSError):
         # A truncated sidecar must not break the read path on every turn.
@@ -115,7 +119,7 @@ def _read_stamp_doc() -> Dict:
     return doc
 
 
-def read_stamp(table_name: str) -> Optional[Dict]:
+def read_stamp(table_name: str) -> Dict | None:
     """
     Which embedder wrote this table, or None if never recorded.
 
@@ -142,7 +146,7 @@ def write_stamp(table_name: str) -> None:
         json.dump(doc, f, indent=2)
 
 
-def _table_vector_dim(table) -> Optional[int]:
+def _table_vector_dim(table) -> int | None:
     """Vector width from the Arrow schema, without reading any rows."""
     try:
         field = table.schema.field("vector")
@@ -202,7 +206,7 @@ def reset_local_db():
         db_path = config.LANCE_DB_PATH
         if os.path.exists(db_path):
             shutil.rmtree(db_path)
-            print(f"LanceDB at {db_path} has been wiped.")
+            logger.info("LanceDB at %s has been wiped.", db_path)
 
 async def search_block_index(query_vector: List[float], limit: int = 12,
                          class_level: str = None, subject: str = None) -> List[Dict]:
@@ -240,6 +244,10 @@ async def search_block_index(query_vector: List[float], limit: int = 12,
         df = query.to_pandas()
 
         for _, row in df.iterrows():
+            # Defence in depth: upsert_local_block already refuses these types, but a row
+            # written some other way must still never reach a tutoring prompt.
+            if row.get("block_type") in TUTORING_EXCLUDED_BLOCK_TYPES:
+                continue
             dist = row.get("_distance", 0)
             certainty = 1 - (dist / 2)
 
@@ -256,7 +264,7 @@ async def search_block_index(query_vector: List[float], limit: int = 12,
     all_results.sort(key=lambda x: x["certainty"], reverse=True)
     return all_results[:limit]
 
-async def get_block_content(block_id: str) -> Optional[str]:
+async def get_block_content(block_id: str) -> str | None:
     """Retrieves the content of a DLL memory node from 'user_memory' table."""
     db = get_db()
     if "user_memory" not in list_table_names(db):
@@ -281,6 +289,7 @@ async def upsert_local_block(block_id: str, content: str, block_type: str,
     Allows the student to add their own blocks (notes, session)
     into a separate local table 'user_memory'.
     """
+    refuse_non_tutoring_block_type(block_type)
     db = get_db()
     data = [{
         "id": block_id,

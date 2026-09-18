@@ -1,0 +1,20 @@
+# Akili Registry — Curriculum Configuration
+# Defines which classes and subjects are part of the registry.
+# The batch pipeline reads this file to know what to generate and upload.
+
+classes:
+  6eme:
+    subjects:
+      - math
+      - english
+      - history
+  5eme:
+    subjects:
+      - math
+      - english
+      - history
+
+# GCS Bucket for distribution (set in .env as GCS_BUCKET_NAME)
+# Files will be uploaded to: gs://{bucket}/courses/{class}_{subject}_v1.parquet
+# Manifest will be at:       gs://{bucket}/manifest.json
+# Prompts will be at:        gs://{bucket}/prompts/prompts_v1.json
