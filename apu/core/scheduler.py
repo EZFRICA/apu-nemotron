@@ -61,7 +61,7 @@ class DeferredWriteScheduler:
         self.max_delay_seconds = max_delay_seconds
         self._sleep = sleep
         self._name = name
-        self._queue: "queue.Queue[tuple[str, dict]]" = queue.Queue()
+        self._queue: queue.Queue[tuple[str, dict]] = queue.Queue()
         self._handlers: dict[str, Callable[[dict], None]] = {}
         self._dead_letters: list[DeadLetter] = []
         self._thread: threading.Thread | None = None

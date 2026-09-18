@@ -96,7 +96,7 @@ MAX_DYNAMIC_BLOCKS = int(os.environ.get("APU_MAX_DYNAMIC_BLOCKS", "5"))
 #
 # THESE ARE CALIBRATED TO THE EMBEDDING MODEL and must be re-measured if it changes.
 # Measured in Akili with paraphrase-multilingual-MiniLM-L12-v2 on real course content,
-# query "Explique-moi les fractions":
+# a French query meaning "explain fractions to me":
 #
 #   chapter_1_simple_fractions      0.670   <- the right chapter
 #   chapter_2_decimal_numbers       0.507   <- same subject, related
@@ -131,6 +131,11 @@ GLOBAL_EXCLUDED_DOMAINS: tuple[str, ...] = (
 )
 TAVILY_MAX_RESULTS = int(os.environ.get("TAVILY_MAX_RESULTS", "5"))
 
+# Longest prompt the cloud registry may install per key (persona, per-class guidelines).
+# The registry supplies instructions, not just content, so a value long enough to crowd out
+# the course context or the student's question is refused and the built-in persona is used.
+REGISTRY_PROMPT_MAX_CHARS = int(os.environ.get("APU_REGISTRY_PROMPT_MAX_CHARS", "8000"))
+
 # ── Guardrails (NeMo Guardrails) ─────────────────────────────────────────────
 # One shared config for every class. What varies per class is data (ClassPolicy),
 # not Colang, so adding a class never means compiling a new rails config.
@@ -155,8 +160,28 @@ ESCALATION_DB_PATH = os.path.join(DATA_DIR, "escalations.sqlite3")
 # day, large enough that clustering does not run on every single event.
 ESCALATION_CLUSTER_TRIGGER_COUNT = int(os.environ.get("APU_ESCALATION_CLUSTER_TRIGGER_COUNT", "5"))
 
-# ── Dashboard identity: STUB, not authentication ─────────────────────────────
-# The Streamlit dashboard has no login. It opens every guard session as this student in
-# this class. Anyone who can reach the dashboard is this student.
-DEMO_STUDENT_ID = os.environ.get("APU_STUDENT_ID", "eleve-demo")
+# ── Student notebook ─────────────────────────────────────────────────────────
+# What the student chose to keep during a conversation, and the source of their revision
+# sheets. Written only on the student's request; never read by the tutor
+# (see apu/notebook/__init__.py).
+NOTEBOOK_DB_PATH = os.path.join(DATA_DIR, "notebook.sqlite3")
+# Longest text one entry may hold, so a runaway save cannot fill a revision sheet.
+NOTEBOOK_MAX_ENTRY_CHARS = 4000
+# Entries one student may keep. Saving is a model call and a row on disk, both driven by the
+# student, so there is a ceiling rather than an open-ended queue.
+NOTEBOOK_MAX_ENTRIES_PER_STUDENT = int(os.environ.get("APU_NOTEBOOK_MAX_ENTRIES", "200"))
+# What one revision sheet may send to the model: enough for a chapter, not a whole notebook.
+NOTEBOOK_MAX_SHEET_ENTRIES = int(os.environ.get("APU_NOTEBOOK_MAX_SHEET_ENTRIES", "25"))
+NOTEBOOK_MAX_SHEET_CHARS = int(os.environ.get("APU_NOTEBOOK_MAX_SHEET_CHARS", "20000"))
+
+# ── Demo identity: STUB, not authentication ──────────────────────────────────
+# The interface has no login. This is the identity it opens with; the sidebar selector
+# switches between the demo students, teachers and admins with no password at all.
+DEMO_STUDENT_ID = os.environ.get("APU_STUDENT_ID", "eleve-aya")
 DEMO_CLASS_ID = os.environ.get("APU_CLASS_ID", "lycee-cocody:3eA")
+
+# Demo students offered by the interface's identity selector (stub). Students are not in
+# any registry of the real system; this list exists only so a live demo can switch pupils.
+DEMO_STUDENTS_PATH = os.environ.get(
+    "APU_DEMO_STUDENTS_PATH", os.path.join(_REPO_ROOT, "registries", "demo_students.json")
+)

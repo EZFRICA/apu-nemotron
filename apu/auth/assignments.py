@@ -62,6 +62,9 @@ class AssignmentRegistry:
     def lookup(self, requester_id: str) -> TeacherAssignment | None:
         return self._by_requester.get(requester_id)
 
+    def all(self) -> list[TeacherAssignment]:
+        return sorted(self._by_requester.values(), key=lambda a: (a.establishment_id, a.role, a.requester_id))
+
     def classes_in_establishment(self, establishment_id: str) -> list[str]:
         return sorted({
             assignment.class_id

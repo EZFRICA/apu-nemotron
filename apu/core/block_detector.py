@@ -1,6 +1,5 @@
 """Heuristic detector proposing a new dynamic DLL block. Ported unchanged from Akili."""
 
-from typing import Dict, List, Optional
 
 from apu.core.block_proposal import BlockProposal
 from apu.logger import get_logger
@@ -11,7 +10,7 @@ logger = get_logger(__name__)
 MIN_TURNS_FOR_DETECTION = 4      # Minimum number of conversation turns
 TOPIC_REPETITION_THRESHOLD = 2   # Number of times a topic should be mentioned
 
-def detect_new_block_opportunity(history: List[Dict], dll: Dict) -> Optional[Dict]:
+def detect_new_block_opportunity(history: list[dict], dll: dict) -> dict | None:
     """
     Analyzes recent history to detect if a new knowledge block
     should be created (e.g., note-taking on a new chapter).
