@@ -110,5 +110,10 @@ class SessionRegistry:
         with self._lock:
             self._sessions.pop(session_id, None)
 
+    def clear(self) -> None:
+        """Close every session (demo reset): all counters restart, as on a reconnection."""
+        with self._lock:
+            self._sessions.clear()
+
 
 sessions = SessionRegistry()

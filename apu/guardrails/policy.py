@@ -14,11 +14,11 @@ from apu import config
 
 
 def parse_class_id(class_id: str) -> tuple[str, str]:
-    """'etablissement_id:classe_code' -> (etablissement_id, classe_code)."""
+    """'establishment_id:class_code' -> (establishment_id, class_code)."""
     establishment_id, separator, class_code = class_id.partition(":")
     if not separator or not establishment_id or not class_code:
         raise ValueError(
-            f"Invalid class_id {class_id!r}: expected 'etablissement_id:classe_code', "
+            f"Invalid class_id {class_id!r}: expected 'establishment_id:class_code', "
             "e.g. 'lycee-cocody:3eA'."
         )
     return establishment_id, class_code
@@ -26,7 +26,7 @@ def parse_class_id(class_id: str) -> tuple[str, str]:
 
 @dataclass(frozen=True)
 class ClassPolicy:
-    class_id: str  # namespaced "etablissement_id:classe_code", e.g. "lycee-cocody:3eA"
+    class_id: str  # namespaced "establishment_id:class_code", e.g. "lycee-cocody:3eA"
     teacher_id: str
     tavily_excluded_domains: list[str]  # added to GLOBAL_EXCLUDED_DOMAINS, never replaces it
     escalation_threshold: int

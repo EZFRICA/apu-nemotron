@@ -22,13 +22,13 @@ from apu.logger import get_logger
 logger = get_logger(__name__)
 
 GENTLE_REPLY = (
-    "Je suis là pour t'aider sur tes cours. Essaie plutôt de me poser une question sur "
-    "une leçon, un exercice ou tes révisions, par exemple « Explique-moi les fractions » "
-    "ou « Aide-moi à préparer mon contrôle d'histoire »."
+    "I'm here to help you with your schoolwork. Try asking me about a lesson, an exercise "
+    "or your revision instead, for example \"Explain fractions to me\" or \"Help me prepare "
+    "for my history test\"."
 )
 FIRM_REPLY = (
-    "Je ne peux t'aider que pour ton travail scolaire, et cette demande n'en fait pas "
-    "partie. Reviens vers moi avec une question sur tes cours, tes exercices ou tes révisions."
+    "I can only help with your schoolwork, and this request isn't part of it. Come back "
+    "with a question about your lessons, your exercises or your revision."
 )
 
 
