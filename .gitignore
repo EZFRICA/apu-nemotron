@@ -1,18 +1,52 @@
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 .venv/
 venv/
-.env
 *.egg-info/
-.pytest_cache/
-.DS_Store
 
-# Per-device state (DLL JSON, LanceDB, embedding stamp), not source.
+# ── Tool caches ──────────────────────────────────────────────────────────────
+# pytest and ruff each drop a .gitignore of their own inside these, so they are
+# already ignored on this machine; named here so a fresh clone behaves the same.
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# .env holds the Token Factory and Tavily keys. .env.example is the documented
+# template and IS tracked.
+.env
+.env.*
+!.env.example
+
+# ── Per-device state, not source ─────────────────────────────────────────────
+# The DLL JSON (L2), the LanceDB store (L3), the embedding stamp, the escalation
+# and notebook databases, and the runtime log. A fresh clone must not inherit
+# another machine's memory, and these hold student data.
 data/
+*.log
+# SQLite in WAL mode writes these beside its database, and the DLL write leaves a
+# lock and a temporary file behind if a process is killed mid-write.
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.tmp
+metadata_links.json.lock
+
 # ONNX embedding model cache (~240MB), populated by scripts/fetch_embedding_model.py.
 models/
-apu_runtime.log
 
 # Build output of the cloud pipeline. Regenerated from cloud_registry/courses/ by
 # batch_pipeline.py and distributed through the bucket, not git.
 cloud_registry/registry/
+
+# ── Local one-offs ───────────────────────────────────────────────────────────
+# Generated commit scripts: meant to be run once and deleted, never committed.
+commit-*.sh
+commit_changes.sh
+
+# ── Editors and OS ───────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/

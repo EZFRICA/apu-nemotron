@@ -22,7 +22,7 @@ dependencies = [
     "lancedb>=0.30.2,<0.31",
     "pandas",
     "pyarrow",
-    # APU Control Center (apu/ui/dashboard.py). Same floor as Akili. watchdog is
+    # APU Control Center (apu/ui/app.py). Same floor as Akili. watchdog is
     # what Streamlit uses to reload on file changes; without it it falls back to
     # slower polling and prints a warning at every launch.
     "streamlit>=1.55.0",
@@ -40,12 +40,16 @@ dependencies = [
     "langchain-tavily>=0.2.18",
     "tavily-python>=0.8.3",
     "scikit-learn>=1.9.1",
+    # Imported directly by apu/escalation/clustering.py to build the matrix HDBSCAN
+    # clusters; listed rather than relied on as a pandas/scikit-learn transitive.
+    "numpy",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
+    "ruff>=0.14.0",
 ]
 
 [tool.uv]
@@ -56,3 +60,23 @@ package = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/F: pyflakes and pycodestyle errors. I: import order. B: common bugs (mutable defaults,
+# except-pass). UP: syntax that this Python version makes simpler.
+select = ["E", "F", "I", "B", "UP"]
+# E402 (import not at top of file): the Streamlit pages must fix sys.path before importing
+# apu, and say so with a noqa on each line.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Ported modules keep their original shape (typing style, one-line bodies) until the
+# behaviour they pin is decided; reformatting them would hide what came from Akili.
+"apu/mmu/dll.py" = ["UP006", "UP035", "E701"]
+"apu/storage/lance_driver.py" = ["UP006", "UP035", "E701"]
+"apu/sync/sync_manager.py" = ["UP006", "UP035", "E701"]
+"apu/core/scheduler.py" = ["UP006", "UP035", "E701"]
