@@ -34,7 +34,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from apu import config
 from apu.core.block_proposal import validate as validate_proposal
@@ -186,7 +186,7 @@ async def load_dll(agent_id: str | None = None) -> dict:
     if not os.path.exists(path):
         return await init_dll()
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         dll = json.load(f)
 
     # Ensure course selection exists
@@ -202,22 +202,28 @@ async def load_dll(agent_id: str | None = None) -> dict:
 
 def save_dll(dll: dict) -> None:
     """
-    Persist the DLL state to disk (JSON) — atomic write with exclusive file lock.
+    Persist the DLL state to disk (JSON): exclusive lock, then an atomic replace.
+
+    The lock is taken on a separate lock file, and the temporary file carries the writer's
+    pid. Locking the temporary file itself did not work: opening it with "w" truncates it
+    BEFORE the lock is taken, so two writers sharing one temporary name could each wipe the
+    other's half-written JSON.
     """
     dll["last_modified"] = datetime.now().isoformat()
     path = config.METADATA_LINKS_PATH
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+    tmp_path = f"{path}.{os.getpid()}.tmp"
+    with open(path + ".lock", "w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
         try:
-            json.dump(dll, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(dll, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
         finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-    os.replace(tmp_path, path)
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def get_head_threshold(dll: dict) -> float:
@@ -230,7 +236,7 @@ async def search_memory(
     query_vector: List[float],
     class_level: str,
     subject: str,
-    dll: Optional[dict] = None,
+    dll: dict | None = None,
 ) -> List[Dict]:
     """
     Bidirectional Metadata Jump (BMJ) — powered by LanceDB vector search.
@@ -541,7 +547,7 @@ async def create_dynamic_block(
     keywords: list[str],
     created_by: str,
     dll: dict,
-    vector: Optional[list[float]] = None
+    vector: list[float] | None = None
 ) -> dict:
     """
     Creates a dynamic block in the DLL and LanceDB.
@@ -609,7 +615,7 @@ async def update_block_content(
     new_content: str,
     new_keywords: list[str],
     dll: dict,
-    vector: Optional[list[float]] = None
+    vector: list[float] | None = None
 ) -> dict:
     """
     Updates a block's content locally.

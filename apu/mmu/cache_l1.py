@@ -5,7 +5,6 @@ Pure singleton module. Ported unchanged from Akili (app_local/mmu/cache_l1.py).
 
 import time
 from collections import OrderedDict
-from typing import Optional
 
 from apu.logger import get_logger
 
@@ -57,7 +56,7 @@ def _ensure_metrics(block_id: str) -> None:
             "last_write_back_at": None,
         }
 
-def get(block_id: str) -> Optional[str]:
+def get(block_id: str) -> str | None:
     _ensure_metrics(block_id)
     entry = _cache.get(block_id)
     now = time.monotonic()
@@ -79,7 +78,7 @@ def get(block_id: str) -> Optional[str]:
     logger.debug("L1 MISS   — '%s'", block_id)
     return None
 
-def set(block_id: str, content: str, block_type: Optional[str] = None) -> None:
+def set(block_id: str, content: str, block_type: str | None = None) -> None:
     ttl = _TTL_BY_TYPE.get(block_type or "", _TTL_DEFAULT)
     _cache[block_id] = (content, time.monotonic() + ttl)
     _cache.move_to_end(block_id)

@@ -9,6 +9,43 @@ import pytest
 from apu.mmu import dll as mmu
 from tests.conftest import check_dll_invariants, make_chain, make_node
 
+# ── persistence ──────────────────────────────────────────────────────────────
+
+def test_concurrent_writers_never_leave_a_half_written_dll(akili_paths):
+    """
+    Two writers used to share one temporary file, opened with "w" (which truncates) before
+    the lock was taken, so one could wipe the other's half-written JSON. The lock is now on
+    a separate file and each writer has its own temporary name.
+    """
+    import json
+    import pathlib as _pathlib
+    import threading
+
+    from apu import config
+
+    chains = [make_chain([f"w{writer}-{index}" for index in range(30)]) for writer in range(6)]
+    errors: list[Exception] = []
+
+    def write(dll):
+        for _ in range(20):
+            try:
+                mmu.save_dll(dll)
+                loaded = json.loads(_pathlib.Path(config.METADATA_LINKS_PATH).read_text())
+                assert len(loaded["nodes"]) == 30, "a reader saw a partial write"
+            except Exception as error:  # reported from the main thread
+                errors.append(error)
+                return
+
+    threads = [threading.Thread(target=write, args=(dll,)) for dll in chains]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    leftovers = list(_pathlib.Path(config.METADATA_LINKS_PATH).parent.glob("*.tmp"))
+    assert leftovers == [], "every temporary file was renamed into place"
+
 
 # ── the healthy baseline ─────────────────────────────────────────────────────
 
