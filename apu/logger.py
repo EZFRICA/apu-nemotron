@@ -1,7 +1,10 @@
 """Central logging, imported by every module. Ported from Akili's logger.py."""
 
 import logging
+import os
 import sys
+
+from apu import config
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 DATE_FORMAT = "%H:%M:%S"
@@ -49,10 +52,18 @@ def configure_root_logger():
     formatter = ColoredFormatter(LOG_FORMAT, datefmt=DATE_FORMAT)
     console_handler.setFormatter(formatter)
 
-    # File handler, no colors. Akili's dashboard tailed this file; kept so the log
-    # stays available once a UI is ported.
-    file_handler = logging.FileHandler("apu_runtime.log", mode="a", encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
+    # File handler, no colors, under the data directory rather than the working directory:
+    # it is per-device state like the rest, and it is wiped by the demo reset.
+    #
+    # INFO, never DEBUG: this file outlives the process and the students are minors. DEBUG
+    # carries block contents and library internals, so a debug line added later would quietly
+    # start writing children's schoolwork to disk. Raise it deliberately, for a session, when
+    # debugging something you cannot reproduce otherwise.
+    os.makedirs(config.DATA_DIR, exist_ok=True)
+    file_handler = logging.FileHandler(
+        os.path.join(config.DATA_DIR, "apu_runtime.log"), mode="a", encoding="utf-8"
+    )
+    file_handler.setLevel(logging.INFO)
     clean_formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
     file_handler.setFormatter(clean_formatter)
 
